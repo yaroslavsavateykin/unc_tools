@@ -1,2 +1,2 @@
-.venv/
+venv/
 copy_to_jupyter_folder.sh
