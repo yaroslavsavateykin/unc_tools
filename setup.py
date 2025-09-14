@@ -17,6 +17,6 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(),
     python_requires=">=3.6",
-    install_requires=read_reqs("reqs.txt"),
-    package_dir={"unc_tools": ""},
+    install_requires=read_reqs("requirements.txt"),
+    package_dir={"unc_tools": "unc_tools"},
 )
