@@ -2,8 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import uncertainties as unc
 import uncertainties.unumpy as unp
-from scipy.optimize import curve_fit
+import scipy.differentiate as diff
+import scipy.optimize as opt
 import warnings
+
+from typing import Union
 
 
 class UncRegression:
@@ -106,7 +109,7 @@ class UncRegression:
         """
         try:
             if self.y_std is not None:
-                self.popt, self.pcov = curve_fit(
+                self.popt, self.pcov = opt.curve_fit(
                     self.func,
                     self.x_nom,
                     self.y_nom,
@@ -114,7 +117,7 @@ class UncRegression:
                     absolute_sigma=True,
                 )
             else:
-                self.popt, self.pcov = curve_fit(self.func, self.x_nom, self.y_nom)
+                self.popt, self.pcov = opt.curve_fit(self.func, self.x_nom, self.y_nom)
         except (RuntimeError, TypeError) as e:
             warnings.warn(f"Curve fitting failed: {e}")
             # Попытка с начальным приближением
@@ -345,3 +348,55 @@ class UncRegression:
         y_pred = [self.func(x_val, *params) for x_val in x_new]
 
         return np.array(y_pred)
+
+    def find_x(
+        self,
+        y: Union[unc.core.Variable, float],
+        x0,
+        xtol_root=1e-20,
+        xtol_diff=1e-20,
+        **kwargs,
+    ):
+        args_nominal = self.coefs_values
+
+        if isinstance(y, unc.core.Variable):
+            y = y.nominal_value
+            ytol = y.std_dev
+        else:
+            y = y
+            ytol = 0
+
+        def func(x):
+            return self.func(x, *args_nominal) - y
+
+        result_root = opt.root_scalar(f=func, x0=x0, xtol=xtol_root)
+
+        if not result_root.converged:
+            raise TypeError("Root not converged")
+
+        result_diff = diff.derivative(
+            f=func,
+            x=result_root.root,
+            tolerances={"atol": xtol_diff},
+        )
+
+        if not result_diff.success:
+            error = {
+                0: "The algorithm converged to the specified tolerances.",
+                -1: "The error estimate increased, so iteration was terminated.",
+                -2: "The maximum number of iterations was reached.",
+                -3: "A non-finite value was encountered.",
+                -4: "Iteration was terminated by callback.",
+                1: "The algorithm is proceeding normally (in callback only).",
+            }
+            raise TypeError(error[result_diff.status])
+
+        dy = result_diff.df
+        dytol = (
+            result_diff.error
+        )  # пока не понял, как правильно учитывать погрешность дифференцирования
+        dxtol = ytol / dy
+
+        xtol_summ = np.sqrt(xtol_root**2 + xtol_diff**2 + dxtol**2)
+
+        return unc.ufloat(result_root.root, xtol_summ)
