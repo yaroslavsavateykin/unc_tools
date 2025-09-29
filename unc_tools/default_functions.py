@@ -100,7 +100,7 @@ class FunctionBase1D:
             sols_list = []
             for sol in self.sols:
                 nominal = sol.subs(nominal_args_dict)
-                if nominal.is_complex:
+                if nominal.is_complex and not nominal.is_real:
                     self._complex = True
 
                     if self._show_complex:
@@ -110,6 +110,7 @@ class FunctionBase1D:
                         real_part = unc.ufloat(sym.re(nominal), abs(sym.re(std)))
                         im_part = unc.ufloat(sym.im(nominal), abs(sym.im(std)))
                         sols_list.append((real_part, im_part))
+
                 else:
                     std = self._calculate_uncertainty_analyticaly(sol).subs(
                         {**nominal_args_dict, **std_args_dict}
@@ -166,31 +167,49 @@ class FunctionBase1D:
 
             latex = latex.replace("+/-", r" \\pm ")
 
-        return latex
+        return "y = " + latex
 
-    def to_latex_sols(self, show_unc=None):
-        if not show_unc:
-            show_unc = self._unc_coefs
-
+    def _calculate_sols(self, show_unc=None):
         latex_sols = []
 
         if self._added_coefs:
             if self._show_complex:
-                del self.__dict__["sols"]
+                if self.sols:
+                    del self.__dict__["sols"]
                 self.add_coefs(self.args)
                 latex_sols = [
                     str(x) if not isinstance(x, tuple) else f"({x[0]}) + ({x[1]}) i"
                     for x in self.sols
                 ]
+
             else:
                 latex_sols = self.sols
 
             latex_sols = [f"{x}".replace("+/-", " \\pm ") for x in latex_sols]
 
         else:
-            del self.__dict__["sols"]
-            self.sols
-            latex_sols = [sym.latex(x) for x in self.sols]
+            if show_unc:
+                if self.sols:
+                    del self.__dict__["sols"]
+
+                latex_sols = [
+                    f"{sym.latex(x)} + {sym.latex(self._calculate_uncertainty_analyticaly(x))}"
+                    for x in self.sols
+                ]
+
+            else:
+                if self.sols:
+                    del self.__dict__["sols"]
+                latex_sols = [sym.latex(x) for x in self.sols]
+
+        return latex_sols
+
+    def to_latex_sols(self, show_unc=True):
+        show_unc = show_unc if not self._unc_coefs else self._unc_coefs
+
+        latex_sols = self._calculate_sols(show_unc=show_unc)
+
+        show_unc = show_unc if not self._unc_coefs else self._unc_coefs
 
         for i, sol in enumerate(latex_sols):
             latex_sols[i] = f"x_{i + 1} = {sol} \\\\"

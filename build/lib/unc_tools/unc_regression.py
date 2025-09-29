@@ -1,4 +1,6 @@
+import uuid
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import uncertainties as unc
 import uncertainties.unumpy as unp
@@ -166,6 +168,7 @@ class UncRegression:
         label="",
         show_errors=True,
         show_band=False,
+        show_scatter=True,
         band_alpha=0.2,
         band_color=None,
         add_legend=True,
@@ -224,42 +227,43 @@ class UncRegression:
         min_visual_std = 0.02 * y_range if y_range > 0 else 1e-10
 
         # Построение данных с или без error bars
-        if show_errors and (self.x_std is not None or self.y_std is not None):
-            # Применение минимального визуального размера для error bars
-            y_err = None
-            x_err = None
-            if self.y_std is not None:
-                y_err = np.maximum(self.y_std, min_visual_std)
-            if self.x_std is not None:
-                x_err = np.maximum(self.x_std, min_visual_std)
+        if show_scatter:
+            if show_errors and (self.x_std is not None or self.y_std is not None):
+                # Применение минимального визуального размера для error bars
+                y_err = None
+                x_err = None
+                if self.y_std is not None:
+                    y_err = np.maximum(self.y_std, min_visual_std)
+                if self.x_std is not None:
+                    x_err = np.maximum(self.x_std, min_visual_std)
 
-            # Настройки по умолчанию для errorbar
-            errorbar_kwargs = {
-                "capsize": 3,
-                "capthick": 1.5,
-                "elinewidth": 1.5,
-                "ms": 4,
-                "alpha": 0.8,
-            }
-            errorbar_kwargs.update(plot_kwargs)
+                # Настройки по умолчанию для errorbar
+                errorbar_kwargs = {
+                    "capsize": 3,
+                    "capthick": 1.5,
+                    "elinewidth": 1.5,
+                    "ms": 4,
+                    "alpha": 0.8,
+                }
+                errorbar_kwargs.update(plot_kwargs)
 
-            eb = ax.errorbar(
-                self.x_nom,
-                self.y_nom,
-                xerr=x_err,
-                yerr=y_err,
-                fmt=".",
-                **errorbar_kwargs,
-            )
+                eb = ax.errorbar(
+                    self.x_nom,
+                    self.y_nom,
+                    xerr=x_err,
+                    yerr=y_err,
+                    fmt=".",
+                    **errorbar_kwargs,
+                )
 
-            # Использование цвета errorbar для полосы если не задан
-            if band_color is None and show_band:
-                band_color = eb[0].get_color()
-        else:
-            # Создание scatter plot
-            ax.scatter(self.x_nom, self.y_nom, label=label, **plot_kwargs)
-            if band_color is None and show_band:
-                band_color = plot_kwargs.get("color", "blue")
+                # Использование цвета errorbar для полосы если не задан
+                if band_color is None and show_band:
+                    band_color = eb[0].get_color()
+            else:
+                # Создание scatter plot
+                ax.scatter(self.x_nom, self.y_nom, label=label, **plot_kwargs)
+                if band_color is None and show_band:
+                    band_color = plot_kwargs.get("color", "blue")
 
         # Построение линии регрессии с R² в легенде
         line_label = f"{label} R² = {self.R2:.4f}" if label else f"R² = {self.R2:.4f}"
@@ -352,32 +356,48 @@ class UncRegression:
     def find_x(
         self,
         y: Union[unc.core.Variable, float],
-        x0,
+        x0: Union[unc.core.Variable, float],
         xtol_root=1e-20,
         xtol_diff=1e-20,
+        maxiter=500,
         **kwargs,
     ):
         args_nominal = self.coefs_values
 
         if isinstance(y, unc.core.Variable):
-            y = y.nominal_value
+            yval = y.nominal_value
             ytol = y.std_dev
         else:
-            y = y
+            yval = y
             ytol = 0
 
-        def func(x):
-            return self.func(x, *args_nominal) - y
+        if isinstance(x0, unc.core.Variable):
+            xtol = x0.std_dev
+            x0 = x0.nominal_value
+        else:
+            xtol = 0
 
-        result_root = opt.root_scalar(f=func, x0=x0, xtol=xtol_root)
+        def func(x, *args):
+            return self.func(x, *args) - yval
+
+        result_root = opt.root_scalar(
+            f=func,
+            x0=x0,
+            xtol=xtol_root,
+            maxiter=maxiter,
+            args=tuple(args_nominal),
+            **kwargs,
+        )
 
         if not result_root.converged:
-            raise TypeError("Root not converged")
+            raise TypeError(f"Root not converged: {result_root.flag}")
 
         result_diff = diff.derivative(
             f=func,
             x=result_root.root,
+            args=tuple(args_nominal),
             tolerances={"atol": xtol_diff},
+            maxiter=maxiter,
         )
 
         if not result_diff.success:
@@ -397,6 +417,22 @@ class UncRegression:
         )  # пока не понял, как правильно учитывать погрешность дифференцирования
         dxtol = ytol / dy
 
-        xtol_summ = np.sqrt(xtol_root**2 + xtol_diff**2 + dxtol**2)
+        xtol_summ = np.sqrt(xtol_root**2 + xtol_diff**2 + dxtol**2 + xtol**2)
 
         return unc.ufloat(result_root.root, xtol_summ)
+
+    def to_csv(self, filename=None):
+        df = {
+            "x": self.x,
+            "y": self.y,
+            "x_std": self.x_std if self.x_std else np.zeros(np.size(self.x)),
+            "y_std": self.y_std if self.y_std else np.zeros(np.size(self.y)),
+        }
+
+        df = pd.DataFrame(df)
+
+        if not filename:
+            filename = f"{str(uuid.uuid4())[:7]}.csv"
+            print("DataFrame was saved to filename")
+
+        df.to_csv(filename)

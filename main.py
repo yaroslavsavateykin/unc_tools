@@ -18,11 +18,12 @@ def time(func):
 
 @time
 def main1():
-    from unc_tools.default_functions import Poly
+    from unc_tools.default_functions import Poly, FunctionBase1D
 
-    a2 = Poly(2).show_complex().add_coefs([4, unc.ufloat(2, 0.001), 2])
+    a = FunctionBase1D(expr_str="1 / (a-b) * log((b-x)/(a-x))")
 
-    print(a2.to_latex_sols())
+    print(a.coefs)
+    print(a.to_latex_expr())
 
 
 @time
@@ -31,8 +32,8 @@ def main2():
 
     a = Hyper(style=0).add_coefs([4, 2])
 
-    print(a.to_latex_sols())
+    print(a.to_latex_sols(show_unc=True))
 
 
 if __name__ == "__main__":
-    main2()
+    main1()

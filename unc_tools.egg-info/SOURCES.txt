@@ -1,8 +1,9 @@
 README.md
 setup.py
+tests/test_unc_solve.py
 unc_tools/__init__.py
+unc_tools/default_functions.py
 unc_tools/descriptors.py
-unc_tools/graphjson2df.py
 unc_tools/unc_regression.py
 unc_tools.egg-info/PKG-INFO
 unc_tools.egg-info/SOURCES.txt

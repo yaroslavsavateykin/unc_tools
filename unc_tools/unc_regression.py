@@ -1,4 +1,6 @@
+import uuid
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import uncertainties as unc
 import uncertainties.unumpy as unp
@@ -166,6 +168,7 @@ class UncRegression:
         label="",
         show_errors=True,
         show_band=False,
+        show_scatter=True,
         band_alpha=0.2,
         band_color=None,
         add_legend=True,
@@ -224,42 +227,43 @@ class UncRegression:
         min_visual_std = 0.02 * y_range if y_range > 0 else 1e-10
 
         # Построение данных с или без error bars
-        if show_errors and (self.x_std is not None or self.y_std is not None):
-            # Применение минимального визуального размера для error bars
-            y_err = None
-            x_err = None
-            if self.y_std is not None:
-                y_err = np.maximum(self.y_std, min_visual_std)
-            if self.x_std is not None:
-                x_err = np.maximum(self.x_std, min_visual_std)
+        if show_scatter:
+            if show_errors and (self.x_std is not None or self.y_std is not None):
+                # Применение минимального визуального размера для error bars
+                y_err = None
+                x_err = None
+                if self.y_std is not None:
+                    y_err = np.maximum(self.y_std, min_visual_std)
+                if self.x_std is not None:
+                    x_err = np.maximum(self.x_std, min_visual_std)
 
-            # Настройки по умолчанию для errorbar
-            errorbar_kwargs = {
-                "capsize": 3,
-                "capthick": 1.5,
-                "elinewidth": 1.5,
-                "ms": 4,
-                "alpha": 0.8,
-            }
-            errorbar_kwargs.update(plot_kwargs)
+                # Настройки по умолчанию для errorbar
+                errorbar_kwargs = {
+                    "capsize": 3,
+                    "capthick": 1.5,
+                    "elinewidth": 1.5,
+                    "ms": 4,
+                    "alpha": 0.8,
+                }
+                errorbar_kwargs.update(plot_kwargs)
 
-            eb = ax.errorbar(
-                self.x_nom,
-                self.y_nom,
-                xerr=x_err,
-                yerr=y_err,
-                fmt=".",
-                **errorbar_kwargs,
-            )
+                eb = ax.errorbar(
+                    self.x_nom,
+                    self.y_nom,
+                    xerr=x_err,
+                    yerr=y_err,
+                    fmt=".",
+                    **errorbar_kwargs,
+                )
 
-            # Использование цвета errorbar для полосы если не задан
-            if band_color is None and show_band:
-                band_color = eb[0].get_color()
-        else:
-            # Создание scatter plot
-            ax.scatter(self.x_nom, self.y_nom, label=label, **plot_kwargs)
-            if band_color is None and show_band:
-                band_color = plot_kwargs.get("color", "blue")
+                # Использование цвета errorbar для полосы если не задан
+                if band_color is None and show_band:
+                    band_color = eb[0].get_color()
+            else:
+                # Создание scatter plot
+                ax.scatter(self.x_nom, self.y_nom, label=label, **plot_kwargs)
+                if band_color is None and show_band:
+                    band_color = plot_kwargs.get("color", "blue")
 
         # Построение линии регрессии с R² в легенде
         line_label = f"{label} R² = {self.R2:.4f}" if label else f"R² = {self.R2:.4f}"
@@ -416,3 +420,32 @@ class UncRegression:
         xtol_summ = np.sqrt(xtol_root**2 + xtol_diff**2 + dxtol**2 + xtol**2)
 
         return unc.ufloat(result_root.root, xtol_summ)
+
+    def to_df(self, export_plot=False):
+        if export_plot:
+            x_min, x_max = np.min(self.x_nom), np.max(self.x_nom)
+            delta = (x_max - x_min) * 0.1
+            x_ax = np.linspace(x_min - delta, x_max + delta, 500)
+            y_ax = self.func(x_ax, *self.popt)
+            df = {"x_fit": x_ax, "y_ax": y_ax}
+
+        else:
+            df = {
+                "x": self.x,
+                "y": self.y,
+                "x_std": self.x_std if self.x_std else np.zeros(np.size(self.x)),
+                "y_std": self.y_std if self.y_std else np.zeros(np.size(self.y)),
+            }
+
+        df = pd.DataFrame(df)
+
+        return df
+
+    def to_csv(self, filename=None, export_plot=False):
+        df = self.to_df(export_plot=export_plot)
+
+        if not filename:
+            filename = f"{str(uuid.uuid4())[:7]}.csv"
+            print("DataFrame was saved to filename")
+
+        df.to_csv(filename)
