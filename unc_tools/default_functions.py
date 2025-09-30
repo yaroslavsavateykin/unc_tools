@@ -36,8 +36,8 @@ class FunctionBase1D:
         )
 
     @cached_property
-    def sols(self) -> List[sym.core.mul.Mul]:
-        solution = sym.solvers.solve(self.expr, sym.Symbol("x"))
+    def sols(self):
+        solution = sym.solvers.solve(self.expr - 0, sym.Symbol("x"))
 
         if not solution:
             raise TypeError("Cant find analytical solution for given expression")
@@ -45,7 +45,22 @@ class FunctionBase1D:
         if self._show_complex:
             return solution
         else:
-            return [x for x in solution if not x.is_complex]
+            solution = [x for x in solution if not x.is_imaginary]
+            return solution
+
+    def find_sols(self, y=0) -> List[sym.core.mul.Mul]:
+        # self.expr -= y
+
+        new_expr = FunctionBase1D(self.expr_str)
+        new_expr.expr -= y
+        # coefs = self.args + [y]
+        # print(coefs)
+        new_expr.add_coefs(self.args)
+
+        if len(new_expr.sols) > 1 and hasattr(new_expr.sols, "__iter__"):
+            return new_expr.sols
+        else:
+            return new_expr.sols[0]
 
     @cached_property
     def lambda_fun(self) -> Callable:
@@ -147,7 +162,8 @@ class FunctionBase1D:
             self.lambda_fun = sym.lambdify(sym.Symbol("x"), self.expr, "numpy")
             self._added_coefs = True
 
-            self.sols = [x.subs(args_dict) for x in self.sols]
+            sols = self.sols
+            self.sols = [x.subs(args_dict) for x in sols]
             if any([x.is_complex for x in self.sols]):
                 self._complex = True
 
@@ -204,17 +220,20 @@ class FunctionBase1D:
 
         return latex_sols
 
-    def to_latex_sols(self, show_unc=True):
+    def to_latex_sols(self, show_unc=True, y=None):
         show_unc = show_unc if not self._unc_coefs else self._unc_coefs
 
-        latex_sols = self._calculate_sols(show_unc=show_unc)
-
-        show_unc = show_unc if not self._unc_coefs else self._unc_coefs
+        if not y:
+            latex_sols = self._calculate_sols(show_unc=show_unc)
+        else:
+            new_expr = FunctionBase1D(self.expr_str + " - A100")
+            new_expr.add_coefs(self.args + [y])
+            latex_sols = new_expr._calculate_sols(show_unc=show_unc)
 
         for i, sol in enumerate(latex_sols):
             latex_sols[i] = f"x_{i + 1} = {sol} \\\\"
 
-        lines = f"\\begin{{split}}\n{'\n'.join(latex_sols)}\n\\end{{split}}"
+        lines = f"\\begin{{array}}{{l}}\n{'\n'.join(latex_sols)}\n\\end{{array}}"
 
         return lines
 

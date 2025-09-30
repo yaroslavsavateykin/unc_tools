@@ -8,7 +8,9 @@ import scipy.differentiate as diff
 import scipy.optimize as opt
 import warnings
 
-from typing import Union
+from typing import Callable, Union
+
+from .default_functions import FunctionBase1D, Poly
 
 
 class UncRegression:
@@ -38,7 +40,7 @@ class UncRegression:
             }
         )
 
-    def __init__(self, x, y, func=None):
+    def __init__(self, x, y, func: Union[Callable, FunctionBase1D] = None):
         """
         Инициализация класса с данными и автоматическое выполнение фитирования
 
@@ -46,28 +48,31 @@ class UncRegression:
         x, y : input data (arrays, pandas Series, or uarrays)
         func : custom function f(x, *params), по умолчанию линейная
         """
-        # Проверка на пустые входные данные
+        if issubclass(type(func), FunctionBase1D):
+            self.func = func.lambda_fun
+            self.expression = func
+        elif isinstance(func, Callable):
+            self.func = func
+            self.expression = None
+        elif func is None:
+            self.expression = Poly(1)
+            self.func = self.expression.lambda_fun
+        else:
+            raise TypeError(
+                "func argument must be either Callable or child class of FunctionBase1D"
+            )
+
         if len(x) == 0 or len(y) == 0:
             raise ValueError("Input arrays cannot be empty")
 
-        # Конвертация в numpy массивы
         self.x = np.asarray(x)
         self.y = np.asarray(y)
 
-        # Функция по умолчанию - линейная
-        if func is None:
-            self.func = lambda x, k, b: k * x + b
-        else:
-            self.func = func
-
-        # Проверка наличия неопределенностей
         self.x_has_unc = len(self.x) > 0 and hasattr(self.x[0], "nominal_value")
         self.y_has_unc = len(self.y) > 0 and hasattr(self.y[0], "nominal_value")
 
-        # Извлечение номинальных значений и стандартных отклонений
         self._extract_values()
 
-        # Автоматическое выполнение фитирования при инициализации
         self._fit()
 
     def _extract_values(self):
@@ -99,7 +104,7 @@ class UncRegression:
         for arr, name in zip([self.x_std, self.y_std], ["x", "y"]):
             if arr is not None and np.any(arr == 0):
                 non_zero = arr[arr > 0]
-                replacement = np.min(non_zero) * 1e-5 if len(non_zero) > 0 else 1e-10
+                replacement = np.min(non_zero) * 1e-5 if len(non_zero) > 0 else 1e-15
                 arr[arr == 0] = replacement
                 warnings.warn(
                     f"Zero uncertainties in {name} replaced with {replacement:.1e}"
@@ -122,21 +127,20 @@ class UncRegression:
                 self.popt, self.pcov = opt.curve_fit(self.func, self.x_nom, self.y_nom)
         except (RuntimeError, TypeError) as e:
             warnings.warn(f"Curve fitting failed: {e}")
-            # Попытка с начальным приближением
             n_params = self.func.__code__.co_argcount - 1
             self.popt = np.ones(n_params)
             self.pcov = np.eye(n_params)
 
-        # Расчет R²
         residuals = self.y_nom - self.func(self.x_nom, *self.popt)
         ss_res = np.sum(residuals**2)
         ss_tot = np.sum((self.y_nom - np.mean(self.y_nom)) ** 2)
         self.R2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
 
-        # Создание коэффициентов с неопределенностями
         try:
             self.coefs = unp.uarray(self.popt, np.sqrt(np.diag(self.pcov)))
+            self.expression.add_coefs(self.coefs)
         except:
+            self.expression.add_coefs(self.popt)
             self.coefs = unp.uarray(self.popt, np.zeros_like(self.popt))
 
     @property
@@ -356,10 +360,11 @@ class UncRegression:
     def find_x(
         self,
         y: Union[unc.core.Variable, float],
-        x0: Union[unc.core.Variable, float],
+        x0: Union[unc.core.Variable, float] = None,
         xtol_root=1e-20,
         xtol_diff=1e-20,
         maxiter=500,
+        solve_numerically=False,
         **kwargs,
     ):
         args_nominal = self.coefs_values
@@ -376,50 +381,66 @@ class UncRegression:
             x0 = x0.nominal_value
         else:
             xtol = 0
+            x0 = x0
 
-        def func(x, *args):
-            return self.func(x, *args) - yval
+        if self.expression and not solve_numerically:
+            sols = self.expression.find_sols(y=y)
 
-        result_root = opt.root_scalar(
-            f=func,
-            x0=x0,
-            xtol=xtol_root,
-            maxiter=maxiter,
-            args=tuple(args_nominal),
-            **kwargs,
-        )
+            if hasattr(sols, "__iter__"):
+                if len(sols) == 1:
+                    return sols[0]
+                else:
+                    return sols
+            else:
+                return sols
 
-        if not result_root.converged:
-            raise TypeError(f"Root not converged: {result_root.flag}")
+        else:
+            if x0 is None:
+                raise TypeError("Setup the x0")
 
-        result_diff = diff.derivative(
-            f=func,
-            x=result_root.root,
-            args=tuple(args_nominal),
-            tolerances={"atol": xtol_diff},
-            maxiter=maxiter,
-        )
+            def func(x, *args):
+                return self.func(x, *args) - yval
 
-        if not result_diff.success:
-            error = {
-                0: "The algorithm converged to the specified tolerances.",
-                -1: "The error estimate increased, so iteration was terminated.",
-                -2: "The maximum number of iterations was reached.",
-                -3: "A non-finite value was encountered.",
-                -4: "Iteration was terminated by callback.",
-                1: "The algorithm is proceeding normally (in callback only).",
-            }
-            raise TypeError(error[result_diff.status])
+            result_root = opt.root_scalar(
+                f=func,
+                x0=x0,
+                xtol=xtol_root,
+                maxiter=maxiter,
+                args=tuple(args_nominal),
+                **kwargs,
+            )
 
-        dy = result_diff.df
-        dytol = (
-            result_diff.error
-        )  # пока не понял, как правильно учитывать погрешность дифференцирования
-        dxtol = ytol / dy
+            if not result_root.converged:
+                raise TypeError(f"Root not converged: {result_root.flag}")
 
-        xtol_summ = np.sqrt(xtol_root**2 + xtol_diff**2 + dxtol**2 + xtol**2)
+            result_diff = diff.derivative(
+                f=func,
+                x=result_root.root,
+                args=tuple(args_nominal),
+                tolerances={"atol": xtol_diff},
+                maxiter=maxiter,
+            )
 
-        return unc.ufloat(result_root.root, xtol_summ)
+            if not result_diff.success:
+                error = {
+                    0: "The algorithm converged to the specified tolerances.",
+                    -1: "The error estimate increased, so iteration was terminated.",
+                    -2: "The maximum number of iterations was reached.",
+                    -3: "A non-finite value was encountered.",
+                    -4: "Iteration was terminated by callback.",
+                    1: "The algorithm is proceeding normally (in callback only).",
+                }
+                raise TypeError(error[result_diff.status])
+
+            dy = result_diff.df
+            dytol = (
+                result_diff.error
+            )  # пока не понял, как правильно учитывать погрешность дифференцирования
+            dxtol = ytol / dy
+
+            xtol_summ = np.sqrt(xtol_root**2 + xtol_diff**2 + dxtol**2 + xtol**2)
+
+            return unc.ufloat(result_root.root, xtol_summ)
 
     def to_df(self, export_plot=False):
         if export_plot:
