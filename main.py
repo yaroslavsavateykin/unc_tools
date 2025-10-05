@@ -1,3 +1,4 @@
+from operator import index
 import uncertainties as unc
 import sympy as sym
 
@@ -53,23 +54,23 @@ def main4():
     import matplotlib.pyplot as plt
     from unc_tools import UncRegression
     from uncertainties.umath import exp
+    from uncertainties import unumpy as unp
 
     df = pd.DataFrame(
-        {"k": [0.09120, 0.1581, 0.2713], "temp": [295.95, 302.95, 312.75]}
+        {
+            "k": [
+                unc.ufloat(0.09120, 0.0001),
+                unc.ufloat(0.1581, 0.0001),
+                unc.ufloat(0.2713, 0.001),
+            ],
+            "temp": [295.95, 302.95, 312.75],
+        }
     )
 
-    reg = UncRegression(1 / df.temp, np.log(df.k))
-    fig, ax = plt.subplots(figsize=(10, 5))
-    print(type(ax))
-    y = -1.6
-    x = reg.find_x(y)
-    print(x)
+    reg = UncRegression(1 / df.temp, unp.log(df.k))
 
-    # ax.plot(x, y)
-
-    reg.plot(ax=ax, show_band=True)
-    # fig.show()
-    # fig.savefig("final.png")
+    reg.to_csv("test.csv", index=False)
+    # print(reg.to_df())
 
 
 if __name__ == "__main__":

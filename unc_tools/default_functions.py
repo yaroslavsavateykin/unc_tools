@@ -37,16 +37,19 @@ class FunctionBase1D:
 
     @cached_property
     def sols(self):
-        solution = sym.solvers.solve(self.expr - 0, sym.Symbol("x"))
+        try:
+            solution = sym.solvers.solve(self.expr - 0, sym.Symbol("x"))
 
-        if not solution:
-            raise TypeError("Cant find analytical solution for given expression")
+            if not solution:
+                raise TypeError("Cant find analytical solution for given expression")
 
-        if self._show_complex:
-            return solution
-        else:
-            solution = [x for x in solution if not x.is_imaginary]
-            return solution
+            if self._show_complex:
+                return solution
+            else:
+                solution = [x for x in solution if not x.is_imaginary]
+                return solution
+        except TypeError:
+            return []
 
     def find_sols(self, y=0) -> List[sym.core.mul.Mul]:
         # self.expr -= y
@@ -181,9 +184,9 @@ class FunctionBase1D:
 
                 latex = latex.replace(sym.latex(self.coefs[i]), replacement)
 
-            latex = latex.replace("+/-", r" \\pm ")
+            latex = "$y = " + latex.replace("+/-", r" \pm ") + "$"
 
-        return "y = " + latex
+        return rf"{latex}"
 
     def _calculate_sols(self, show_unc=None):
         latex_sols = []

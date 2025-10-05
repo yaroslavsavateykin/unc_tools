@@ -204,7 +204,7 @@ class UncRegression:
 
         # Создание расширенного диапазона для построения линии
         x_min, x_max = np.min(self.x_nom), np.max(self.x_nom)
-        delta = (x_max - x_min) * 0.1
+        delta = (x_max - x_min) * 0.05
         x_ax = np.linspace(x_min - delta, x_max + delta, 500)
         y_ax = self.func(x_ax, *self.popt)
 
@@ -265,12 +265,12 @@ class UncRegression:
                     band_color = eb[0].get_color()
             else:
                 # Создание scatter plot
-                ax.scatter(self.x_nom, self.y_nom, label=label, **plot_kwargs)
+                ax.scatter(self.x_nom, self.y_nom, **plot_kwargs)
                 if band_color is None and show_band:
                     band_color = plot_kwargs.get("color", "blue")
 
         # Построение линии регрессии с R² в легенде
-        line_label = f"{label} R² = {self.R2:.4f}" if label else f"R² = {self.R2:.4f}"
+        line_label = f"{label}\n R² = {self.R2:.4f}" if label else f"R² = {self.R2:.4f}"
         ax.plot(x_ax, y_ax, label=line_label, color=plot_kwargs.get("color"))
 
         # Добавление коэффициентов в легенду
@@ -384,7 +384,7 @@ class UncRegression:
             x0 = x0
 
         if self.expression and not solve_numerically:
-            sols = self.expression.find_sols(y=y)
+            sols = self.expression.find_sols(y=yval)
 
             if hasattr(sols, "__iter__"):
                 if len(sols) == 1:
@@ -448,25 +448,31 @@ class UncRegression:
             delta = (x_max - x_min) * 0.1
             x_ax = np.linspace(x_min - delta, x_max + delta, 500)
             y_ax = self.func(x_ax, *self.popt)
-            df = {"x_fit": x_ax, "y_ax": y_ax}
+            df = {"x_fit": x_ax, "y_fit": y_ax}
 
         else:
+            y = unp.nominal_values(self.y)
+
             df = {
-                "x": self.x,
-                "y": self.y,
-                "x_std": self.x_std if self.x_std else np.zeros(np.size(self.x)),
-                "y_std": self.y_std if self.y_std else np.zeros(np.size(self.y)),
+                "x": unp.nominal_values(self.x),
+                "y": y,
+                "x_std": self.x_std
+                if self.x_std is not None and len(self.x_std) > 0
+                else np.zeros(np.size(self.x)),
+                "y_std": self.y_std
+                if self.y_std is not None and len(self.y_std) > 0
+                else np.zeros(np.size(self.y)),
             }
 
         df = pd.DataFrame(df)
 
         return df
 
-    def to_csv(self, filename=None, export_plot=False):
+    def to_csv(self, filename=None, export_plot=False, *args, **kwargs):
         df = self.to_df(export_plot=export_plot)
 
         if not filename:
             filename = f"{str(uuid.uuid4())[:7]}.csv"
-            print("DataFrame was saved to filename")
+            print(f"DataFrame was saved to {filename}")
 
-        df.to_csv(filename)
+        df.to_csv(filename, *args, **kwargs)
