@@ -1,9 +1,14 @@
+from ast import arg, expr
+from copy import deepcopy
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-from typing import Union, List, Optional
-import uncertainties
-from uncertainties.unumpy import nominal_values, std_devs
+from typing import Tuple, Union, List, Optional
+import uncertainties as unc
+from uncertainties.unumpy import nominal_values, std_devs, uarray
+
+
+from unc_tools.default_functions import FunctionBase1D
 
 _original_plot = matplotlib.axes.Axes.plot
 
@@ -16,8 +21,8 @@ def new_plot(
     x = np.asarray(x)
     y = np.asarray(y)
 
-    x_has_unc = any(isinstance(xi, uncertainties.core.Variable) for xi in x)
-    y_has_unc = any(isinstance(yi, uncertainties.core.Variable) for yi in y)
+    x_has_unc = any(isinstance(xi, unc.core.Variable) for xi in x)
+    y_has_unc = any(isinstance(yi, unc.core.Variable) for yi in y)
 
     try:
         x_nom = nominal_values(x) if x_has_unc else np.asarray(x, dtype=float)
@@ -87,3 +92,155 @@ def new_plot(
 
 
 matplotlib.axes.Axes.plot = new_plot
+
+import sympy as sym
+
+_original_lambdify = sym.lambdify
+
+
+def new_lambdify(
+    x,
+    expr: Union[
+        sym.core.add.Add,
+        sym.core.expr.Expr,
+        Tuple[sym.core.add.Add, sym.core.expr.Expr],
+    ],
+    backend="numpy",
+    *args,
+    **kwargs,
+):
+    if backend == "unc":
+        if not (hasattr(x, "__iter__")):
+            x = [x]
+        else:
+            x = list(x)
+
+        if isinstance(expr, tuple) and len(expr) == 2:
+            expr_nom = expr[0]
+            expr_std = expr[1]
+
+        else:
+            args = []
+
+            expr_nom = expr
+
+            expr_std = FunctionBase1D._calculate_uncertainty_analyticaly(expr_nom, x)
+
+            # .subs({**nominal_coefs_dict, **std_coefs_dict})
+
+        args_nom = x
+        args_std = deepcopy(args_nom)
+        for arg in args_nom:
+            args_std.append(sym.Symbol(f"Delta_{str(arg)}"))
+
+        # print(expr_std.free_symbols)
+        func_std = _original_lambdify(args_std, expr_std, "numpy")
+        func_nom = _original_lambdify(args_nom, expr_nom, "numpy")
+
+        def unc_func(x):
+            x = [x] if not hasattr(x, "__iter__") else x
+            x = np.asarray(x)
+
+            x_has_unc = any(isinstance(xi, unc.core.Variable) for xi in x)
+
+            x_nom = nominal_values(x) if x_has_unc else np.asarray(x, dtype=float)
+            x_std = std_devs(x) if x_has_unc else np.ones(np.shape(x_nom)) * 1e-30
+
+            # x_std = np.stack((x_nom, x_std), axis=1)
+            # x_std = np.concatenate((x_nom, x_std), axis=1)
+
+            print(f"x = {x}")
+            print(f"x_std = {x_std}")
+            print(f"x_nom = {x_nom}")
+
+            print(f"{expr_nom} : {func_nom(x)}")
+            print(f"{expr_std} : {func_std(x_nom, x_std)}")
+
+            if len(x) == 1:
+                return unc.ufloat(func_nom(x_nom), func_std(x_std))
+            else:
+                y1 = func_nom(x)
+                y2 = unc.ufloat(0, func_std(x_nom, x_std))
+
+                return y1 + y2
+
+        return unc_func
+
+    else:
+        return _original_lambdify(x, expr=expr, *args, **kwargs)
+
+
+sym.lambdify = new_lambdify
+
+
+sym.core.cache.use_cache = False
+
+_unc_attrs = {}
+
+
+def get_unc_attr(obj, attr, default=None):
+    obj_id = id(obj)
+    return _unc_attrs.get(obj_id, {}).get(attr, default)
+
+
+def set_unc_attr(obj, attr, value):
+    obj_id = id(obj)
+    if obj_id not in _unc_attrs:
+        _unc_attrs[obj_id] = {"is_unc": False, "added_unc": sym.S.Zero}
+    _unc_attrs[obj_id][attr] = value
+
+
+_original_subs = sym.Basic.subs
+
+
+def new_subs(self, arg1: dict = {}, arg2=None, **kwargs):
+    is_unc = get_unc_attr(self, "is_unc", False)
+    added_unc = get_unc_attr(self, "added_unc", sym.S.Zero)
+
+    unc_args = [
+        key
+        for key in arg1
+        if (hasattr(arg1[key], "nominal_value") and hasattr(arg1[key], "std_dev"))
+    ]
+
+    if unc_args or is_unc:
+        coefs_dict = arg1
+
+        # separating nominal_values and standart deviations
+        nominal_coefs_dict = {}
+        std_coefs_dict = {}
+        for key in coefs_dict:
+            delta = sym.Symbol(f"Delta_{str(key)}")
+            if hasattr(coefs_dict[key], "nominal_value") and hasattr(
+                coefs_dict[key], "std_dev"
+            ):
+                nominal_coefs_dict[key] = coefs_dict[key].nominal_value
+                std_coefs_dict[delta] = coefs_dict[key].std_dev
+            else:
+                nominal_coefs_dict[key] = coefs_dict[key]
+                std_coefs_dict[delta] = 1e-20
+
+        expr_std = FunctionBase1D._calculate_uncertainty_analyticaly(self, unc_args)
+        expr_std = _original_subs(expr_std, {**nominal_coefs_dict, **std_coefs_dict})
+        expr_nom = _original_subs(self, nominal_coefs_dict, arg2, **kwargs)
+
+        # Получаем текущие значения для результата
+        result_is_unc = get_unc_attr(expr_nom, "is_unc", False)
+        result_added_unc = get_unc_attr(expr_nom, "added_unc", sym.S.Zero)
+
+        if not result_is_unc:
+            set_unc_attr(expr_nom, "is_unc", True)
+            set_unc_attr(expr_nom, "added_unc", expr_std)
+        else:
+            new_unc = sym.sqrt(result_added_unc**2 + expr_std**2)
+            set_unc_attr(expr_nom, "added_unc", new_unc)
+
+        return expr_nom
+
+    else:
+        return _original_subs(self, arg1, arg2, **kwargs)
+
+
+sym.Basic.subs = new_subs
+
+sym.core.cache.use_cache = True

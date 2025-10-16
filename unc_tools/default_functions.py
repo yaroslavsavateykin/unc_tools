@@ -1,5 +1,6 @@
 from ast import Call, Dict, Raise, expr
 from functools import cached_property
+from math import exp
 from os import replace
 from typing import Callable, List, Union
 from matplotlib.pyplot import show
@@ -7,13 +8,19 @@ import sympy as sym
 from sympy.matrices.expressions.matmul import new
 import uncertainties as unc
 import numpy as np
+import re
 
 
 class FunctionBase1D:
     def __init__(self, expr_str: str = ""):
         self.expr_str = expr_str
         self.expr_unc: str = ""
-        self.args: list = []
+        self.expr_sym = sym.parse_expr(expr_str)
+        self.args = sorted(
+            [x for x in list(self.expr_sym.free_symbols) if not str(x) == "x"],
+            key=lambda s: str(s),
+        )
+
         self._added_coefs = False
         self._unc_coefs = False
         self._complex = False
@@ -25,30 +32,23 @@ class FunctionBase1D:
         # self.lambda_fun: Callable
 
     @cached_property
-    def expr(self) -> Union[sym.core.add.Add, sym.core.expr.Expr]:
-        return sym.parse_expr(self.expr_str)
-
-    @cached_property
     def coefs(self) -> List[sym.core.symbol.Symbol]:
-        return sorted(
-            [x for x in list(self.expr.free_symbols) if not str(x) == "x"],
-            key=lambda s: str(s),
-        )
+        return self.args
 
     @cached_property
     def sols(self):
         try:
-            solution = sym.solvers.solve(self.expr - 0, sym.Symbol("x"))
+            solution = sym.solvers.solve(self.expr_sym - 0, sym.Symbol("x"))
 
-            if not solution:
-                raise TypeError("Cant find analytical solution for given expression")
+            # if not solution:
+            #    raise TypeError("Cant find analytical solution for given expression")
 
             if self._show_complex:
                 return solution
             else:
                 solution = [x for x in solution if not x.is_imaginary]
                 return solution
-        except TypeError:
+        except:
             return []
 
     def find_sols(self, y=0) -> List[sym.core.mul.Mul]:
@@ -58,7 +58,9 @@ class FunctionBase1D:
         new_expr.expr -= y
         # coefs = self.args + [y]
         # print(coefs)
-        new_expr.add_coefs(self.args)
+
+        if self._added_coefs:
+            new_expr.add_coefs(self.coefs)
 
         if len(new_expr.sols) > 1 and hasattr(new_expr.sols, "__iter__"):
             return new_expr.sols
@@ -67,8 +69,8 @@ class FunctionBase1D:
 
     @cached_property
     def lambda_fun(self) -> Callable:
-        lambda_args = [sym.Symbol("x")] + self.coefs
-        return sym.lambdify(lambda_args, self.expr, "numpy")
+        lambda_args = [sym.Symbol("x")] + self.args
+        return sym.lambdify(lambda_args, self.expr_sym, "numpy")
 
     def show_complex(self):
         self._show_complex = not self._show_complex
@@ -76,9 +78,10 @@ class FunctionBase1D:
 
     @staticmethod
     def _calculate_uncertainty_analyticaly(
-        expr: Union[sym.core.add.Add, sym.core.expr.Expr],
+        expr: Union[sym.core.add.Add, sym.core.expr.Expr], parms=[]
     ):
-        parms = expr.free_symbols
+        if not parms:
+            parms = expr.free_symbols
 
         unc_list = []
         for parm in parms:
@@ -88,42 +91,42 @@ class FunctionBase1D:
 
         return sym.sqrt(np.sum(unc_list))
 
-    def add_coefs(self, args: list):
-        self.args = args
+    def add_coefs(self, coefs: list):
+        self.coefs = coefs
 
-        if len(args) != len(self.coefs):
+        if len(coefs) != len(self.coefs):
             raise TypeError("Number of args is not the same as numer of coefs")
 
-        if any([isinstance(x, unc.core.Variable) for x in args]):
+        if any([isinstance(x, unc.core.Variable) for x in coefs]):
             self._unc_coefs = True
 
-        args_dict = {}
-        for i in range(len(args)):
-            args_dict[self.coefs[i]] = args[i]
+        coefs_dict = {}
+        for i in range(len(coefs)):
+            coefs_dict[self.args[i]] = coefs[i]
 
         if self._unc_coefs:
             # separating nominal_values and standart deviations
-            nominal_args_dict = {}
-            std_args_dict = {}
-            for key in args_dict:
+            nominal_coefs_dict = {}
+            std_coefs_dict = {}
+            for key in coefs_dict:
                 delta = sym.Symbol(f"Delta_{str(key)}")
-                if isinstance(args_dict[key], unc.core.Variable):
-                    nominal_args_dict[key] = args_dict[key].nominal_value
-                    std_args_dict[delta] = args_dict[key].std_dev
+                if isinstance(coefs_dict[key], unc.core.Variable):
+                    nominal_coefs_dict[key] = coefs_dict[key].nominal_value
+                    std_coefs_dict[delta] = coefs_dict[key].std_dev
                 else:
-                    nominal_args_dict[key] = args_dict[key]
-                    std_args_dict[delta] = 0
+                    nominal_coefs_dict[key] = coefs_dict[key]
+                    std_coefs_dict[delta] = 0
 
             # making solutions
             sols_list = []
             for sol in self.sols:
-                nominal = sol.subs(nominal_args_dict)
+                nominal = sol.subs(nominal_coefs_dict)
                 if nominal.is_complex and not nominal.is_real:
                     self._complex = True
 
                     if self._show_complex:
                         std = self._calculate_uncertainty_analyticaly(sol).subs(
-                            {**nominal_args_dict, **std_args_dict}
+                            {**nominal_coefs_dict, **std_coefs_dict}
                         )
                         real_part = unc.ufloat(sym.re(nominal), abs(sym.re(std)))
                         im_part = unc.ufloat(sym.im(nominal), abs(sym.im(std)))
@@ -131,61 +134,66 @@ class FunctionBase1D:
 
                 else:
                     std = self._calculate_uncertainty_analyticaly(sol).subs(
-                        {**nominal_args_dict, **std_args_dict}
+                        {**nominal_coefs_dict, **std_coefs_dict}
                     )
                     sols_list.append(unc.ufloat(nominal, std))
 
             self.sols = sols_list
 
             # making lambda function
-            def wrap_lambdify(func: Callable, *args) -> Callable:
+            def wrap_lambdify(func: Callable, *coefs) -> Callable:
                 def new_lambda(x):
-                    return func(x, *args)
+                    return func(x, *coefs)
 
                 return new_lambda
 
             self.lambda_fun = wrap_lambdify(
-                sym.lambdify(sym.Symbol("x"), self.expr, "numpy"), args
+                sym.lambdify([sym.Symbol("x")] + self.args, self.expr_sym, "numpy"),
+                *coefs,
             )
 
             # making str expr
             self.expr_unc = self.expr_str
-            for key in args_dict:
-                if isinstance(args_dict[key], unc.core.Variable):
-                    replacement = f"unc.ufloat({args_dict[key].nominal_value},{args_dict[key].std_dev})"
+            for key in coefs_dict:
+                if isinstance(coefs_dict[key], unc.core.Variable):
+                    replacement = f"unc.ufloat({coefs_dict[key].nominal_value},{coefs_dict[key].std_dev})"
                 else:
-                    replacement = str(args_dict[key])
+                    replacement = str(coefs_dict[key])
 
                 self.expr_unc = str(self.expr_unc).replace(str(key), replacement)
 
             self._added_coefs = True
 
         else:
-            self.expr = self.expr.subs(args_dict)
-            self.lambda_fun = sym.lambdify(sym.Symbol("x"), self.expr, "numpy")
+            self.expr_sym = self.expr_sym.subs(coefs_dict)
+            self.lambda_fun = sym.lambdify(sym.Symbol("x"), self.expr_sym, "numpy")
             self._added_coefs = True
 
             sols = self.sols
-            self.sols = [x.subs(args_dict) for x in sols]
+            self.sols = [x.subs(coefs_dict) for x in sols]
             if any([x.is_complex for x in self.sols]):
                 self._complex = True
 
         return self
 
     def to_latex_expr(self):
-        latex = sym.latex(self.expr)
+        latex = sym.latex(self.expr_sym)
 
         if self._added_coefs:
             for i in range(len(self.coefs)):
-                if isinstance(self.args[i], unc.core.Variable):
-                    replacement = f"({self.args[i]})"
+                if isinstance(self.coefs[i], unc.core.Variable):
+                    replacement = f"({self.coefs[i]})"
                 else:
-                    replacement = f"{self.args[i]}"
+                    replacement = f"{self.coefs[i]}"
 
-                latex = latex.replace(sym.latex(self.coefs[i]), replacement)
+                latex = latex.replace(sym.latex(self.args[i]), replacement)
 
             latex = "$y = " + latex.replace("+/-", r" \pm ") + "$"
-
+        latex = re.sub(
+            r"e([+-])(\d+)",
+            lambda m: rf"\cdot 10^{{{m.group(1)}{str(int(m.group(2)))}}}",
+            latex,
+        )
         return rf"{latex}"
 
     def _calculate_sols(self, show_unc=None):
@@ -195,7 +203,7 @@ class FunctionBase1D:
             if self._show_complex:
                 if self.sols:
                     del self.__dict__["sols"]
-                self.add_coefs(self.args)
+                self.add_coefs(self.coefs)
                 latex_sols = [
                     str(x) if not isinstance(x, tuple) else f"({x[0]}) + ({x[1]}) i"
                     for x in self.sols
@@ -230,21 +238,37 @@ class FunctionBase1D:
             latex_sols = self._calculate_sols(show_unc=show_unc)
         else:
             new_expr = FunctionBase1D(self.expr_str + " - A100")
-            new_expr.add_coefs(self.args + [y])
+            new_expr.add_coefs(self.coefs + [y])
             latex_sols = new_expr._calculate_sols(show_unc=show_unc)
 
         for i, sol in enumerate(latex_sols):
             latex_sols[i] = f"x_{i + 1} = {sol} \\\\"
 
         lines = f"\\begin{{array}}{{l}}\n{'\n'.join(latex_sols)}\n\\end{{array}}"
-
+        lines = re.sub(
+            r"e([+-])(\d+)",
+            lambda m: rf"\cdot 10^{{{m.group(1)}{str(int(m.group(2)))}}}",
+            lines,
+        )
         return lines
+
+    def deriv(self, level=1):
+        expr = self.expr_sym
+
+        deriv = sym.diff(expr, sym.Symbol("x"), level)
+
+        new_expr_str = str(deriv)
+
+        new_func = FunctionBase1D(new_expr_str)
+
+        if any(self.coefs):
+            new_func.add_coefs(self.coefs)
+
+        return new_func
 
 
 class Poly(FunctionBase1D):
     def __init__(self, degree: int = str):
-        super().__init__()
-
         self.degree = degree
 
         expr_str = ""
@@ -252,7 +276,8 @@ class Poly(FunctionBase1D):
             expr_str += f"p_{i}*x**{degree - i} + "
         expr_str += f"p_{degree}"
 
-        self.expr_str = expr_str
+        super().__init__(expr_str)
+        # self.expr_str = expr_str
 
     @cached_property
     def sols(self):
@@ -266,9 +291,9 @@ class Poly(FunctionBase1D):
 
 class Hyper(FunctionBase1D):
     def __init__(self, style=0):
-        super().__init__()
-
         if style == 0:
-            self.expr_str = "p_0*x / (x + p_1)"
+            expr_str = "p_0*x / (x + p_1)"
         else:
-            self.expr_str = "p_0 / (x + p_1) + p_2"
+            expr_str = "p_0 / (x + p_1) + p_2"
+
+        super().__init__(expr_str)

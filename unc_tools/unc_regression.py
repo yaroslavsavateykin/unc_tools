@@ -7,6 +7,7 @@ import uncertainties.unumpy as unp
 import scipy.differentiate as diff
 import scipy.optimize as opt
 import warnings
+import sympy as sym
 
 from typing import Callable, Union
 
@@ -25,20 +26,30 @@ class UncRegression:
     """
 
     @staticmethod
-    def latex_style():
-        plt.rcParams.update(
-            {
-                "text.usetex": True,
-                "font.family": "serif",  # Используем засечковый шрифт
-                "font.serif": ["Computer Modern"],
-                "text.latex.preamble": r"""
-                \usepackage[utf8]{inputenc}
-                \usepackage[russian]{babel}
-                \usepackage[T2A]{fontenc}
-            """,
-                "pgf.texsystem": "xelatex",
-            }
-        )
+    def latex_style(tex: bool):
+        if tex:
+            plt.rcParams.update(
+                {
+                    "text.usetex": True,
+                    "font.family": "serif",
+                    "font.serif": ["Computer Modern"],
+                    "text.latex.preamble": r"""
+                    \usepackage[utf8]{inputenc}
+                    \usepackage[russian]{babel}
+                    \usepackage[T2A]{fontenc}
+                """,
+                    "pgf.texsystem": "xelatex",
+                }
+            )
+        else:
+            plt.rcParams.update(
+                {
+                    "text.usetex": False,
+                    "font.family": "sans-serif",
+                    "font.sans-serif": ["DejaVu Sans", "Arial", "Helvetica"],
+                    "pgf.texsystem": None,  # или можно удалить этот параметр
+                }
+            )
 
     def __init__(self, x, y, func: Union[Callable, FunctionBase1D] = None):
         """
@@ -138,9 +149,11 @@ class UncRegression:
 
         try:
             self.coefs = unp.uarray(self.popt, np.sqrt(np.diag(self.pcov)))
-            self.expression.add_coefs(self.coefs)
+            if self.expression:
+                self.expression.add_coefs(self.coefs)
         except:
-            self.expression.add_coefs(self.popt)
+            if self.expression:
+                self.expression.add_coefs(self.popt)
             self.coefs = unp.uarray(self.popt, np.zeros_like(self.popt))
 
     @property
@@ -176,7 +189,9 @@ class UncRegression:
         band_alpha=0.2,
         band_color=None,
         add_legend=True,
-        show_coefficients=True,
+        show_expr=True,
+        show_coefficients=False,
+        show_r2=True,
         **kwargs,
     ):
         """
@@ -204,7 +219,7 @@ class UncRegression:
 
         # Создание расширенного диапазона для построения линии
         x_min, x_max = np.min(self.x_nom), np.max(self.x_nom)
-        delta = (x_max - x_min) * 0.05
+        delta = (x_max - x_min) * 0.0001
         x_ax = np.linspace(x_min - delta, x_max + delta, 500)
         y_ax = self.func(x_ax, *self.popt)
 
@@ -269,19 +284,32 @@ class UncRegression:
                 if band_color is None and show_band:
                     band_color = plot_kwargs.get("color", "blue")
 
-        # Построение линии регрессии с R² в легенде
-        line_label = f"{label}\n R² = {self.R2:.4f}" if label else f"R² = {self.R2:.4f}"
-        ax.plot(x_ax, y_ax, label=line_label, color=plot_kwargs.get("color"))
+        if show_r2:
+            r2_str = f"\nR²= {self.R2:.5f}"
+        else:
+            r2_str = ""
 
-        # Добавление коэффициентов в легенду
-        if show_coefficients:
-            for i, coef in enumerate(self.coefs):
-                ax.plot(
-                    [],
-                    [],
-                    " ",
-                    label=f"$p_{{{i}}}$ = {coef:.2u}".replace("+/-", r"$\pm$"),
+        if show_expr:
+            if self.expression:
+                latex = self.expression.to_latex_expr()
+                line_label = f"{label}\n{latex}{r2_str}"
+            else:
+                raise TypeError("Задайте функцию при помощи FunctionBase1D")
+        elif show_coefficients and not show_expr:
+            coefs = self.expression.args
+            line_label = (
+                "\n".join(
+                    f"${sym.latex(coefs[i])} = {self.coefs[i]:.2u}$".replace(
+                        "+/-", r"\pm"
+                    )
+                    for i in range(len(self.coefs))
                 )
+                + r2_str
+            )
+        else:
+            line_label = r2_str.strip("\n")
+
+        ax.plot(x_ax, y_ax, label=line_label, color=plot_kwargs.get("color"))
 
         # Построение доверительной полосы
         if show_band:
