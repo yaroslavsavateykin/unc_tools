@@ -1,7 +1,5 @@
-from ast import arg, expr
 from copy import deepcopy
 import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 from typing import Tuple, Union, List, Optional
 import uncertainties as unc
@@ -25,10 +23,14 @@ def new_plot(
     y_has_unc = any(isinstance(yi, unc.core.Variable) for yi in y)
 
     try:
-        x_nom = nominal_values(x) if x_has_unc else np.asarray(x, dtype=float)
-        y_nom = nominal_values(y) if y_has_unc else np.asarray(y, dtype=float)
-        x_std = std_devs(x) if x_has_unc else None
-        y_std = std_devs(y) if y_has_unc else None
+        x_nom = nominal_values(x)
+        y_nom = nominal_values(y)
+        # x_nom = nominal_values(x) if x_has_unc else np.asarray(x, dtype=float)
+        # y_nom = nominal_values(y) if y_has_unc else np.asarray(y, dtype=float)
+        x_std = std_devs(x)
+        y_std = std_devs(y)
+        # x_std = std_devs(x) if x_has_unc else None
+        # y_std = std_devs(y) if y_has_unc else None
     except (TypeError, ValueError):
         x_nom = np.asarray(x, dtype=float)
         y_nom = np.asarray(y, dtype=float)

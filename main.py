@@ -1,4 +1,3 @@
-from operator import index
 import uncertainties as unc
 import sympy as sym
 
@@ -22,8 +21,7 @@ def main1():
     from unc_tools.default_functions import Poly, FunctionBase1D
 
     a = FunctionBase1D(expr_str="1 / (a-b) * log((b-x)/(a-x))")
-
-    # print(a.coefs)
+    print(a.coefs)
     print(a.to_latex_expr())
 
 
@@ -35,7 +33,7 @@ def main2():
 
     a = a.add_coefs([unc.ufloat(4, 0.001), unc.ufloat(2, 0.001), 3])
 
-    # print(a.find_sols(y=1))
+    print(a.find_sols(y=1))
 
     print(a.to_latex_sols(show_unc=False, y=1))
 
