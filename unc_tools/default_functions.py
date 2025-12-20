@@ -92,11 +92,12 @@ class FunctionBase1D:
         return sym.sqrt(np.sum(unc_list))
 
     def add_coefs(self, coefs: list):
-        self.coefs = coefs
 
         if len(coefs) != len(self.coefs):
             raise TypeError("Number of args is not the same as numer of coefs")
 
+        self.coefs = coefs
+        
         if any([isinstance(x, unc.core.Variable) for x in coefs]):
             self._unc_coefs = True
 

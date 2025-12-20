@@ -8,6 +8,97 @@ from uncertainties.unumpy import nominal_values, std_devs, uarray
 
 from unc_tools.default_functions import FunctionBase1D
 
+_original_scatter = matplotlib.axes.Axes.scatter
+
+
+def new_scatter(
+    self, x: Union[List, np.ndarray], y: Union[List, np.ndarray], *args, **kwargs
+):
+    x = [x] if not hasattr(x, "__iter__") else x
+    y = [y] if not hasattr(y, "__iter__") else y
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    x_has_unc = any(isinstance(xi, unc.core.Variable) for xi in x)
+    y_has_unc = any(isinstance(yi, unc.core.Variable) for yi in y)
+
+    try:
+        x_nom = nominal_values(x)
+        y_nom = nominal_values(y)
+        x_std = std_devs(x)
+        y_std = std_devs(y)
+    except (TypeError, ValueError):
+        x_nom = np.asarray(x, dtype=float)
+        y_nom = np.asarray(y, dtype=float)
+        x_std = None
+        y_std = None
+
+    min_visual_std = 2e-10
+
+    scatter_kwargs = kwargs.copy()
+    if "color" not in scatter_kwargs and "c" not in scatter_kwargs:
+        try:
+            prop_cycle = matplotlib.rcParams["axes.prop_cycle"]
+            colors = prop_cycle.by_key().get(
+                "color", ["C0", "C1", "C2", "C3", "C4", "C5"]
+            )
+            color_index = len(self.collections) % len(colors)
+            scatter_kwargs["color"] = colors[color_index]
+        except (AttributeError, KeyError):
+            color_index = len(self.collections) % 11
+            scatter_kwargs["color"] = f"C{color_index}"
+
+    if x_std is None and y_std is None:
+        return _original_scatter(self, x_nom, y_nom, *args, **scatter_kwargs)
+
+    x_err = None
+    y_err = None
+
+    if x_std is not None:
+        x_err = np.where(x_std > min_visual_std, x_std, 1)
+        if np.all(x_err == 1):
+            x_err = None
+
+    if y_std is not None:
+        y_err = np.where(y_std > min_visual_std, y_std, 1)
+        if np.all(y_err == 1):
+            y_err = None
+
+    if x_err is None and y_err is None:
+        return _original_scatter(self, x_nom, y_nom, *args, **scatter_kwargs)
+
+    errorbar_kwargs = {
+        "capsize": 4,
+        "capthick": 2.5,
+        "elinewidth": 2.5,
+        "markersize": scatter_kwargs.get("s", 20) ** 0.5
+        if "s" in scatter_kwargs
+        else 6,
+        "alpha": scatter_kwargs.get("alpha", 1),
+    }
+
+    if "color" in scatter_kwargs:
+        errorbar_kwargs["color"] = scatter_kwargs["color"]
+
+    for arg in ["s", "marker", "linewidths", "edgecolors"]:
+        if arg in scatter_kwargs:
+            del scatter_kwargs[arg]
+
+    errorbar_kwargs.update(scatter_kwargs)
+
+    return self.errorbar(
+        x_nom,
+        y_nom,
+        xerr=x_err,
+        yerr=y_err,
+        fmt="o",
+        **errorbar_kwargs,
+    )
+
+
+matplotlib.axes.Axes.scatter = new_scatter
+
+
 _original_plot = matplotlib.axes.Axes.plot
 
 
@@ -226,7 +317,6 @@ def new_subs(self, arg1: dict = {}, arg2=None, **kwargs):
         expr_std = _original_subs(expr_std, {**nominal_coefs_dict, **std_coefs_dict})
         expr_nom = _original_subs(self, nominal_coefs_dict, arg2, **kwargs)
 
-        # Получаем текущие значения для результата
         result_is_unc = get_unc_attr(expr_nom, "is_unc", False)
         result_added_unc = get_unc_attr(expr_nom, "added_unc", sym.S.Zero)
 
