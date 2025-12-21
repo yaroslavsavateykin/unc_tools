@@ -8,19 +8,35 @@ from uncertainties import unumpy as unp
 from uncertainties import ufloat
 import uncertainties as unc
 import warnings
+from typing import Any, Sequence, Callable, Union
 
 
-def calculate_r2(x, y):
-    """
-    Calculate R-squared (coefficient of determination) for a linear fit y = k*x + b.
+def calculate_r2(
+    x: Sequence[Any] | np.ndarray, y: Sequence[Any] | np.ndarray
+) -> float:
+    """Calculate the R-squared statistic for a linear fit.
 
-    Parameters:
-    x, y : array-like or uncertainties.ufloat array
-        Input data. Can be regular arrays or arrays with uncertainties.
+    Converts uncertainty-aware inputs to nominal values when needed, fits a linear
+    model ``y = k*x + b`` using `scipy.optimize.curve_fit`, and computes the
+    coefficient of determination.
+
+    Args:
+        x (Sequence[Any] | np.ndarray): Input x-values, possibly containing uncertainties.
+        y (Sequence[Any] | np.ndarray): Input y-values, possibly containing uncertainties.
 
     Returns:
-    float
-        R-squared value
+        float: Coefficient of determination for the fitted line.
+
+    Raises:
+        RuntimeError: Propagated if curve fitting fails to converge.
+        TypeError: If inputs cannot be interpreted as numeric sequences.
+
+    Side Effects:
+        None.
+
+    Examples:
+        >>> calculate_r2([0, 1], [0, 1])
+        1.0
     """
     # Extract nominal values if uncertainties are present
     try:
@@ -46,7 +62,7 @@ def calculate_r2(x, y):
 
 def plot_r2_heatmap(
     r2_df: pd.DataFrame,
-    figsize: tuple = (10, 10),
+    figsize: tuple[int, int] = (10, 10),
     dpi: int = 100,
     cmap: str = "viridis",
     vmin: float = 0.0,
@@ -54,44 +70,44 @@ def plot_r2_heatmap(
     annotate: bool = True,
     annot_fmt: str = ".2f",
     title: str = "Тепловая карта $R^2$ между столбцами",
-    path: str = None,
-    ax: plt.Axes = None,
-    **kwargs,
+    path: str | None = None,
+    ax: plt.Axes | None = None,
+    **kwargs: Any,
 ) -> plt.Axes:
+    """Построить тепловую карту значений R² с дополнительными настройками.
+
+    Создает матплотлиб-фигуру или использует переданную ось, отображает матрицу R²,
+    при необходимости подписывает ячейки и сохраняет результат на диск.
+
+    Args:
+        r2_df (pd.DataFrame): Квадратная матрица значений R².
+        figsize (tuple[int, int]): Размер фигуры в дюймах.
+        dpi (int): Разрешение изображения.
+        cmap (str): Цветовая карта для отображения.
+        vmin (float): Минимальное значение цветовой шкалы.
+        vmax (float): Максимальное значение цветовой шкалы.
+        annotate (bool): Флаг отображения значений в ячейках.
+        annot_fmt (str): Формат чисел для аннотаций.
+        title (str): Заголовок графика.
+        path (str | None): Путь сохранения изображения; если None, не сохраняется.
+        ax (plt.Axes | None): Существующая ось; при None создается новая.
+        **kwargs (Any): Дополнительные аргументы, передаваемые в `plt.imshow`.
+
+    Returns:
+        plt.Axes: Ось с построенной теплокартой.
+
+    Raises:
+        ValueError: Если входная матрица не квадратная или содержит несовместимые данные.
+
+    Side Effects:
+        Может создавать новую фигуру и сохранять файл на диск.
+
+    Examples:
+        >>> import pandas as pd
+        >>> df = pd.DataFrame([[1.0, 0.5], [0.5, 1.0]])
+        >>> ax = plot_r2_heatmap(df)
+    """
     save_path = path
-    """
-    Построение тепловой карты значений R² с дополнительными настройками.
-    
-    Параметры:
-    ----------
-    r2_df : pd.DataFrame
-        DataFrame с значениями R² (должен быть квадратной матрицей)
-    figsize : tuple, optional
-        Размер фигуры (по умолчанию (10, 10))
-    dpi : int, optional
-        Разрешение изображения (по умолчанию 100)
-    cmap : str, optional
-        Цветовая карта (по умолчанию 'viridis')
-    vmin, vmax : float, optional
-        Границы цветовой шкалы (по умолчанию 0.0 и 1.0)
-    annotate : bool, optional
-        Отображать ли значения в ячейках (по умолчанию True)
-    annot_fmt : str, optional
-        Формат аннотаций (по умолчанию ".2f")
-    title : str, optional
-        Заголовок графика
-    save_path : str, optional
-        Путь для сохранения изображения (если None - не сохранять)
-    ax : plt.Axes, optional
-        Ось для отрисовки (если None - создается новая фигура)
-    **kwargs : 
-        Дополнительные аргументы для plt.imshow()
-    
-    Возвращает:
-    -----------
-    plt.Axes
-        Ось с построенной тепловой картой
-    """
     # Создаем новую фигуру если ось не передана
     if ax is None:
         plt.figure(figsize=figsize, dpi=dpi)
@@ -149,17 +165,31 @@ def plot_r2_heatmap(
 
 
 def plot_r2_heatmap_plotly(
-    r2_df: pd.DataFrame, path, title: str = "Тепловая карта R²"
+    r2_df: pd.DataFrame, path: str, title: str = "Тепловая карта R²"
 ) -> None:
-    """
-    Строит интерактивную теплокарту R² с помощью plotly.graph_objects.Heatmap.
+    """Строит интерактивную теплокарту R² в plotly.
 
-    Параметры:
-    -----------
-    r2_df : pd.DataFrame
-        Квадрат корреляционной матрицы (R²) — must be квадратный DataFrame.
-    title : str
-        Заголовок графика.
+    Использует `plotly.graph_objects.Heatmap` для визуализации матрицы R² и сохраняет
+    результат в HTML или PNG в зависимости от расширения переданного пути.
+
+    Args:
+        r2_df (pd.DataFrame): Квадратная матрица R².
+        path (str): Путь для сохранения HTML или PNG файла.
+        title (str): Заголовок графика.
+
+    Returns:
+        None
+
+    Raises:
+        ValueError: Если формат пути не поддерживается библиотекой plotly.
+
+    Side Effects:
+        Создает файл на диске и открывает интерактивное окно отображения.
+
+    Examples:
+        >>> import pandas as pd
+        >>> df = pd.DataFrame([[1.0, 0.2], [0.2, 1.0]])
+        >>> plot_r2_heatmap_plotly(df, "heatmap.html")
     """
     # Убедимся, что импортирован go
     # import plotly.graph_objects as go  # <-- уже сделано вверху
@@ -194,14 +224,23 @@ def plot_r2_heatmap_plotly(
 
 
 def remove_unifrom_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Возвращает новый DataFrame без столбцов, в которых все значения одинаковы.
+    """Удалить столбцы с одинаковыми значениями по всей выборке.
 
-    Параметры:
-    df (pd.DataFrame): Входной DataFrame.
+    Args:
+        df (pd.DataFrame): Входной DataFrame.
 
-    Возвращает:
-    pd.DataFrame: DataFrame без "постоянных" столбцов.
+    Returns:
+        pd.DataFrame: Новый DataFrame без постоянных столбцов.
+
+    Raises:
+        None.
+
+    Side Effects:
+        None.
+
+    Examples:
+        >>> import pandas as pd
+        >>> remove_unifrom_columns(pd.DataFrame({'a':[1,1], 'b':[1,2]}))
     """
     # Определяем столбцы, у которых количество уникальных значений равно 1
     constant_cols = [col for col in df.columns if df[col].nunique(dropna=False) == 1]
@@ -211,14 +250,23 @@ def remove_unifrom_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def remove_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Удаляет из DataFrame столбцы, которые полностью дублируют другие столбцы.
+    """Удалить из DataFrame столбцы-дубликаты.
 
-    Параметры:
-    df (pd.DataFrame): Входной DataFrame.
+    Args:
+        df (pd.DataFrame): Входной DataFrame.
 
-    Возвращает:
-    pd.DataFrame: Новый DataFrame без дублирующих столбцов.
+    Returns:
+        pd.DataFrame: DataFrame без полностью совпадающих столбцов.
+
+    Raises:
+        None.
+
+    Side Effects:
+        None.
+
+    Examples:
+        >>> import pandas as pd
+        >>> remove_duplicate_columns(pd.DataFrame({'a':[1,2], 'b':[1,2]}))
     """
     # Используем .T.duplicated(), чтобы найти дублирующиеся строки в транспонированном DataFrame,
     # что соответствует дублирующим столбцам в исходном.
@@ -228,26 +276,30 @@ def remove_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def batch_r2(
     df: pd.DataFrame,
-    target,
+    target: Union[np.ndarray, pd.Series, pd.DataFrame],
 ) -> pd.DataFrame:
-    """
-    Параметры:
-    -----------
-    target : np.ndarray | pd.Series | pd.DataFrame
-        Целевой вектор (или единственный столбец), по отношению к которому считается R².
-        Может быть:
-          • 1D numpy array (shape=(n,)) или 2D numpy array с одним столбцом (shape=(n,1))
-          • pd.Series длины n
-          • pd.DataFrame с одним столбцом и n строками
-    df : pd.DataFrame
-        DataFrame из n-строк и m-столбцов, столбцы которого будут отсортированы
-        по величине R² относительно target.
+    """Вычислить R² для каждого столбца DataFrame относительно цели.
 
-    Возвращает:
-    -----------
-    pd.DataFrame
-        Новый DataFrame, содержащий только те столбцы из df,
-        у которых R²(target, столбец) >= r2_threshold.
+    Нормализует тип цели к одномерному numpy-массиву и вычисляет коэффициент
+    детерминации для каждого столбца входного DataFrame.
+
+    Args:
+        df (pd.DataFrame): Исходные данные признаков.
+        target (np.ndarray | pd.Series | pd.DataFrame): Целевой вектор или столбец.
+
+    Returns:
+        pd.DataFrame: DataFrame со значениями R² для каждого столбца.
+
+    Raises:
+        ValueError: Если размерности цели и признаков не совпадают.
+        TypeError: Если тип цели не поддерживается.
+
+    Side Effects:
+        None.
+
+    Examples:
+        >>> import pandas as pd, numpy as np
+        >>> batch_r2(pd.DataFrame({'a':[1,2]}), np.array([1,2]))
     """
     # Приводим target к 1D numpy-массиву
     if isinstance(target, pd.DataFrame):
@@ -289,30 +341,31 @@ def batch_r2(
 
 
 def filter_by_r2_threshold(
-    df: pd.DataFrame, target, r2_threshold: float
+    df: pd.DataFrame, target: Union[np.ndarray, pd.Series, pd.DataFrame], r2_threshold: float
 ) -> pd.DataFrame:
-    """
-    Оставляет в df только те столбцы, у которых R² с target >= r2_threshold.
+    """Отфильтровать столбцы по пороговому значению R² относительно цели.
 
-    Параметры:
-    -----------
-    target : np.ndarray | pd.Series | pd.DataFrame
-        Целевой вектор (или единственный столбец), по отношению к которому считается R².
-        Может быть:
-          • 1D numpy array (shape=(n,)) или 2D numpy array с одним столбцом (shape=(n,1))
-          • pd.Series длины n
-          • pd.DataFrame с одним столбцом и n строками
-    df : pd.DataFrame
-        DataFrame из n-строк и m-столбцов, столбцы которого будут отсортированы
-        по величине R² относительно target.
-    r2_threshold : float
-        Пороговое значение R² (0 ≤ r2_threshold ≤ 1). Столбцы с R² < r2_threshold будут отброшены.
+    Приводит целевой вектор к одномерному виду, вычисляет R² для каждого столбца
+    и возвращает новый DataFrame, содержащий только удовлетворяющие порогу столбцы.
 
-    Возвращает:
-    -----------
-    pd.DataFrame
-        Новый DataFrame, содержащий только те столбцы из df,
-        у которых R²(target, столбец) >= r2_threshold.
+    Args:
+        df (pd.DataFrame): Исходный DataFrame с признаками.
+        target (np.ndarray | pd.Series | pd.DataFrame): Целевой вектор или столбец.
+        r2_threshold (float): Минимальное допустимое значение R² (0 ≤ r2_threshold ≤ 1).
+
+    Returns:
+        pd.DataFrame: DataFrame, содержащий столбцы с R² выше или равным порогу.
+
+    Raises:
+        ValueError: Если длина цели отличается от числа строк или порог некорректен.
+        TypeError: Если тип цели не поддерживается.
+
+    Side Effects:
+        None.
+
+    Examples:
+        >>> import pandas as pd, numpy as np
+        >>> filter_by_r2_threshold(pd.DataFrame({'a':[1,2]}), np.array([1,2]), 0.5)
     """
     # Приводим target к 1D numpy-массиву
     if isinstance(target, pd.DataFrame):
@@ -352,28 +405,53 @@ def filter_by_r2_threshold(
     return df[selected_cols]
 
 
-def unc_curve_fit(x, y, f=lambda x, k, b: k * x + b):
-    """
-    Perform linear regression and return coefficients with uncertainties.
+def unc_curve_fit(
+    x: Any, y: Any, f: Callable[..., Any] = lambda x, k, b: k * x + b
+) -> np.ndarray:
+    """Perform regression and return coefficients with uncertainties.
 
-    Handles:
-    - Regular arrays (floats/int)
-    - uarrays from uncertainties package
-    - Pandas Series containing floats or ufloat elements
+    Accepts regular numeric arrays, uarrays, or pandas Series containing uncertain
+    values, extracts nominal values and standard deviations as needed, and performs
+    weighted curve fitting.
 
-    Parameters:
-    x, y : array-like inputs (can be mix of regular/uarray)
-    f : model function (default linear)
+    Args:
+        x (Any): Набор значений признаков, допускаются ufloat элементы.
+        y (Any): Набор целевых значений, допускаются ufloat элементы.
+        f (Callable[..., Any]): Модельная функция для аппроксимации, по умолчанию линейная.
 
     Returns:
-    uarray of coefficients with uncertainties
+        np.ndarray: Массив коэффициентов как uarray с неопределенностями.
+
+    Raises:
+        RuntimeError: Если оптимизация не сходится.
+        TypeError: Если входы не могут быть приведены к числовому виду.
+
+    Side Effects:
+        None.
+
+    Examples:
+        >>> unc_curve_fit([0, 1], [0, 1])
     """
     # Convert to numpy arrays while preserving ufloat objects
     x_arr = np.asarray(x, dtype=object)
     y_arr = np.asarray(y, dtype=object)
 
     # Helper function to check for ufloat elements
-    def has_ufloats(arr):
+    def has_ufloats(arr: np.ndarray) -> bool:
+        """Check whether an array contains uncertainty objects.
+
+        Args:
+            arr (np.ndarray): Array to inspect.
+
+        Returns:
+            bool: True if any element exposes a `nominal_value` attribute.
+
+        Raises:
+            None.
+
+        Side Effects:
+            None.
+        """
         return any(hasattr(el, "nominal_value") for el in arr.flat)
 
     # Process x: extract nominal values if ufloats present

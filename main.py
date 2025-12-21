@@ -1,9 +1,48 @@
 import uncertainties as unc
 import sympy as sym
+from typing import Any, Callable
 
 
-def time(func):
-    def wrapper(*args, **kwargs):
+def time(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Measure execution time of a callable.
+
+    Wraps the provided function, records wall-clock duration, prints it to stdout,
+    and returns the original function's result without altering its behavior.
+
+    Args:
+        func (Callable[..., Any]): Function to be timed.
+
+    Returns:
+        Callable[..., Any]: Wrapped callable that reports execution duration.
+
+    Raises:
+        None.
+
+    Side Effects:
+        Prints timing information to stdout.
+
+    Examples:
+        >>> @time
+        ... def demo():
+        ...     return 42
+    """
+
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Execute the wrapped function while timing its duration.
+
+        Args:
+            *args: Positional arguments forwarded to the wrapped callable.
+            **kwargs: Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Result returned by the wrapped function.
+
+        Raises:
+            None.
+
+        Side Effects:
+            Prints timing information to stdout.
+        """
         import time
 
         start = time.time()
@@ -17,7 +56,27 @@ def time(func):
 
 
 @time
-def main1():
+def main1() -> None:
+    """Demonstrate creation of a base function without coefficients.
+
+    Initializes a `FunctionBase1D` instance, prints detected coefficients, and
+    outputs the LaTeX representation for manual inspection.
+
+    Args:
+        None.
+
+    Returns:
+        None
+
+    Raises:
+        None.
+
+    Side Effects:
+        Prints coefficient information and LaTeX to stdout.
+
+    Examples:
+        >>> main1()
+    """
     from unc_tools.default_functions import Poly, FunctionBase1D
 
     a = FunctionBase1D(expr_str="1 / (a-b) * log((b-x)/(a-x))")
@@ -26,7 +85,27 @@ def main1():
 
 
 @time
-def main2():
+def main2() -> None:
+    """Demonstrate polynomial regression with uncertain coefficients.
+
+    Constructs a quadratic polynomial, fits it using uncertain coefficients, and
+    prints both the solutions and their LaTeX representations.
+
+    Args:
+        None.
+
+    Returns:
+        None
+
+    Raises:
+        None.
+
+    Side Effects:
+        Prints solutions to stdout.
+
+    Examples:
+        >>> main2()
+    """
     from .unc_tools.default_functions import Poly
 
     a = Poly(2)  # .show_complex()
@@ -38,7 +117,27 @@ def main2():
     print(a.to_latex_sols(show_unc=False, y=1))
 
 
-def main3():
+def main3() -> None:
+    """Showcase symbolic substitution with uncertainty tracking.
+
+    Demonstrates how patched sympy substitution and lambdify handle uncertain
+    values by constructing an expression, applying substitutions, and evaluating it.
+
+    Args:
+        None.
+
+    Returns:
+        None
+
+    Raises:
+        None.
+
+    Side Effects:
+        Prints intermediate values to stdout.
+
+    Examples:
+        >>> main3()
+    """
     import unc_tools
     import sympy as sym
     import numpy as np
@@ -67,7 +166,27 @@ def main3():
     print(y)
 
 
-def main4():
+def main4() -> None:
+    """Demonstrate regression with exponential model and derivatives.
+
+    Builds a pandas DataFrame with uncertain values, fits an uncertainty-aware
+    regression model, and prints the derivative expression.
+
+    Args:
+        None.
+
+    Returns:
+        None
+
+    Raises:
+        None.
+
+    Side Effects:
+        Prints derivative information to stdout and may create plot data.
+
+    Examples:
+        >>> main4()
+    """
     import pandas as pd
     import numpy as np
     import matplotlib.pyplot as plt
@@ -96,7 +215,27 @@ def main4():
     # print(reg.to_df())
 
 
-def main5():
+def main5() -> None:
+    """Demonstrate fitting a bi-exponential model to sample data.
+
+    Creates synthetic time-series data, performs regression using `UncRegression`,
+    evaluates component functions, and saves a plot illustrating the fit.
+
+    Args:
+        None.
+
+    Returns:
+        None
+
+    Raises:
+        None.
+
+    Side Effects:
+        Generates and saves a plot file and prints intermediate fit results.
+
+    Examples:
+        >>> main5()
+    """
     import numpy as np
     from unc_tools import UncRegression, FunctionBase1D
     import matplotlib.pyplot as plt

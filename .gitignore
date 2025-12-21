@@ -1,4 +1,6 @@
 venv/
-copy_to_jupyter_folder.sh
 unc_tools.egg-info/
+.pytest_cache/
 build/
+tests/
+

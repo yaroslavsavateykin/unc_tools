@@ -1,7 +1,7 @@
 from copy import deepcopy
 import matplotlib
 import numpy as np
-from typing import Tuple, Union, List, Optional
+from typing import Tuple, Union, List, Optional, Any, Callable
 import uncertainties as unc
 from uncertainties.unumpy import nominal_values, std_devs, uarray
 
@@ -12,8 +12,41 @@ _original_scatter = matplotlib.axes.Axes.scatter
 
 
 def new_scatter(
-    self, x: Union[List, np.ndarray], y: Union[List, np.ndarray], *args, **kwargs
-):
+    self,
+    x: Union[List, np.ndarray],
+    y: Union[List, np.ndarray],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Create a scatter plot that visualizes uncertainties when present.
+
+    Converts inputs to numpy arrays, extracts nominal values and standard deviations
+    when `uncertainties` variables are provided, and falls back to the original
+    matplotlib scatter if no meaningful uncertainty is available. Error bars are
+    added automatically when uncertainty magnitudes exceed a minimal visual threshold.
+
+    Args:
+        self (matplotlib.axes.Axes): Target axes for rendering.
+        x (list | np.ndarray): X-coordinates, optionally containing uncertainty values.
+        y (list | np.ndarray): Y-coordinates, optionally containing uncertainty values.
+        *args: Additional positional arguments forwarded to matplotlib scatter.
+        **kwargs: Additional keyword arguments forwarded to matplotlib scatter.
+
+    Returns:
+        Any: Matplotlib artist or container returned by the scatter/errorbar call.
+
+    Raises:
+        TypeError: If inputs cannot be converted to numeric arrays.
+        ValueError: If input shapes are incompatible for plotting.
+
+    Side Effects:
+        None.
+
+    Examples:
+        >>> import matplotlib.pyplot as plt
+        >>> ax = plt.subplot()
+        >>> _ = ax.scatter([1, 2], [3, 4])
+    """
     x = [x] if not hasattr(x, "__iter__") else x
     y = [y] if not hasattr(y, "__iter__") else y
     x = np.asarray(x)
@@ -103,8 +136,41 @@ _original_plot = matplotlib.axes.Axes.plot
 
 
 def new_plot(
-    self, x: Union[List, np.ndarray], y: Union[List, np.ndarray], *args, **kwargs
-):
+    self,
+    x: Union[List, np.ndarray],
+    y: Union[List, np.ndarray],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Draw a line plot that accounts for uncertainties via error bars.
+
+    Converts iterable inputs to numpy arrays, extracts nominal values and standard
+    deviations when uncertainty variables are detected, and reuses the original
+    matplotlib plot when no significant uncertainty is present. Error bars are added
+    with sensible defaults when standard deviations are available.
+
+    Args:
+        self (matplotlib.axes.Axes): Target axes for rendering.
+        x (list | np.ndarray): X-coordinates that may include uncertainty values.
+        y (list | np.ndarray): Y-coordinates that may include uncertainty values.
+        *args: Additional positional arguments forwarded to matplotlib plot.
+        **kwargs: Additional keyword arguments forwarded to matplotlib plot.
+
+    Returns:
+        Any: Matplotlib line or errorbar container produced by the plotting call.
+
+    Raises:
+        TypeError: If inputs cannot be coerced to numeric arrays.
+        ValueError: If input shapes are incompatible for plotting.
+
+    Side Effects:
+        None.
+
+    Examples:
+        >>> import matplotlib.pyplot as plt
+        >>> ax = plt.subplot()
+        >>> _ = ax.plot([0, 1], [0, 1])
+    """
     x = [x] if not hasattr(x, "__iter__") else x
     y = [y] if not hasattr(y, "__iter__") else y
     x = np.asarray(x)
@@ -192,16 +258,43 @@ _original_lambdify = sym.lambdify
 
 
 def new_lambdify(
-    x,
+    x: Any,
     expr: Union[
         sym.core.add.Add,
         sym.core.expr.Expr,
         Tuple[sym.core.add.Add, sym.core.expr.Expr],
     ],
-    backend="numpy",
-    *args,
-    **kwargs,
-):
+    backend: str = "numpy",
+    *args: Any,
+    **kwargs: Any,
+) -> Callable[..., Any]:
+    """Create a callable from a sympy expression with optional uncertainty handling.
+
+    Wraps sympy's `lambdify`, optionally generating an uncertainty-aware function
+    when `backend` is set to ``"unc"`` by analytically propagating symbol deviations.
+    Falls back to the original `lambdify` for other backends.
+
+    Args:
+        x (Any): Symbol or iterable of symbols used as function arguments.
+        expr (sym.core.add.Add | sym.core.expr.Expr | tuple[sym.core.add.Add, sym.core.expr.Expr]): Expression to convert or tuple of nominal and uncertainty expressions.
+        backend (str): Backend identifier; when ``"unc"`` constructs uncertainty-aware callable.
+        *args: Additional positional arguments forwarded to sympy.lambdify.
+        **kwargs: Additional keyword arguments forwarded to sympy.lambdify.
+
+    Returns:
+        Callable[..., Any]: Callable evaluating the symbolic expression, possibly returning uncertainties.
+
+    Raises:
+        TypeError: Propagated from sympy if expressions or arguments are invalid.
+
+    Side Effects:
+        Prints diagnostic information when using the uncertainty backend.
+
+    Examples:
+        >>> x = sym.symbols("x")
+        >>> f = sym.lambdify(x, x**2, "unc")
+        >>> f(unc.ufloat(2, 0.1))
+    """
     if backend == "unc":
         if not (hasattr(x, "__iter__")):
             x = [x]
@@ -230,7 +323,21 @@ def new_lambdify(
         func_std = _original_lambdify(args_std, expr_std, "numpy")
         func_nom = _original_lambdify(args_nom, expr_nom, "numpy")
 
-        def unc_func(x):
+        def unc_func(x: Union[List, np.ndarray, Any]) -> Any:
+            """Evaluate the uncertainty-aware expression.
+
+            Args:
+                x (list | np.ndarray | Any): Input values that may carry uncertainties.
+
+            Returns:
+                Any: Evaluated result containing propagated uncertainties.
+
+            Raises:
+                None.
+
+            Side Effects:
+                Prints nominal and uncertainty components for debugging purposes.
+            """
             x = [x] if not hasattr(x, "__iter__") else x
             x = np.asarray(x)
 
@@ -271,12 +378,46 @@ sym.core.cache.use_cache = False
 _unc_attrs = {}
 
 
-def get_unc_attr(obj, attr, default=None):
+def get_unc_attr(obj: Any, attr: str, default: Any = None) -> Any:
+    """Retrieve a stored uncertainty attribute for a sympy object.
+
+    Args:
+        obj (Any): Object whose cached attribute is requested.
+        attr (str): Attribute name to read.
+        default (Any, optional): Fallback value when attribute is missing.
+
+    Returns:
+        Any: Stored attribute value or the provided default.
+
+    Raises:
+        None.
+
+    Side Effects:
+        None.
+    """
     obj_id = id(obj)
     return _unc_attrs.get(obj_id, {}).get(attr, default)
 
 
-def set_unc_attr(obj, attr, value):
+def set_unc_attr(obj: Any, attr: str, value: Any) -> None:
+    """Attach an uncertainty-related attribute to a sympy object.
+
+    Ensures a tracking dictionary exists for the object before assignment.
+
+    Args:
+        obj (Any): Object receiving the attribute.
+        attr (str): Attribute name to set.
+        value (Any): Value to store under the attribute name.
+
+    Returns:
+        None
+
+    Raises:
+        None.
+
+    Side Effects:
+        Mutates the module-level `_unc_attrs` cache.
+    """
     obj_id = id(obj)
     if obj_id not in _unc_attrs:
         _unc_attrs[obj_id] = {"is_unc": False, "added_unc": sym.S.Zero}
@@ -286,7 +427,29 @@ def set_unc_attr(obj, attr, value):
 _original_subs = sym.Basic.subs
 
 
-def new_subs(self, arg1: dict = {}, arg2=None, **kwargs):
+def new_subs(self, arg1: dict[Any, Any] = {}, arg2: Any = None, **kwargs: Any) -> Any:
+    """Substitute values into a sympy expression with uncertainty propagation.
+
+    Extends the default `subs` to detect `uncertainties` variables, separate nominal
+    values and standard deviations, and attach propagated uncertainty metadata to the
+    resulting expression. Falls back to the original substitution when no uncertainty
+    inputs are detected.
+
+    Args:
+        self (sym.Basic): Expression subject to substitution.
+        arg1 (dict): Primary substitution mapping that may contain uncertainty values.
+        arg2 (Any, optional): Secondary substitutions passed to the original method.
+        **kwargs: Additional keyword arguments forwarded to the original `subs`.
+
+    Returns:
+        Any: Expression with substitutions applied, possibly annotated with uncertainty metadata.
+
+    Raises:
+        TypeError: If the provided coefficients mismatch expected structure.
+
+    Side Effects:
+        Updates module-level uncertainty cache for returned expressions.
+    """
     is_unc = get_unc_attr(self, "is_unc", False)
     added_unc = get_unc_attr(self, "added_unc", sym.S.Zero)
 
