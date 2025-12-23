@@ -370,7 +370,7 @@ def new_lambdify(
         return _original_lambdify(x, expr=expr, *args, **kwargs)
 
 
-sym.lambdify = new_lambdify
+# sym.lambdify = new_lambdify
 
 
 sym.core.cache.use_cache = False
@@ -496,6 +496,6 @@ def new_subs(self, arg1: dict[Any, Any] = {}, arg2: Any = None, **kwargs: Any) -
         return _original_subs(self, arg1, arg2, **kwargs)
 
 
-sym.Basic.subs = new_subs
+# sym.Basic.subs = new_subs
 
 sym.core.cache.use_cache = True

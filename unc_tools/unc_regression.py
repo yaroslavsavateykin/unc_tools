@@ -8,6 +8,7 @@ import scipy.differentiate as diff
 import scipy.optimize as opt
 import warnings
 import sympy as sym
+import re
 
 from typing import Callable, Union, Any, Sequence, Optional
 
@@ -70,6 +71,7 @@ class UncRegression:
         x: Union[Sequence[Any], np.ndarray, pd.Series],
         y: Union[Sequence[Any], np.ndarray, pd.Series],
         func: Union[Callable[..., Any], FunctionBase1D, None] = None,
+        sl=None,
     ) -> None:
         """Инициализировать регрессию с поддержкой неопределенностей.
 
@@ -110,8 +112,12 @@ class UncRegression:
         if len(x) == 0 or len(y) == 0:
             raise ValueError("Input arrays cannot be empty")
 
-        self.x = np.asarray(x)
-        self.y = np.asarray(y)
+        if sl is not None:
+            self.x = np.asarray(x)[sl]
+            self.y = np.asarray(y)[sl]
+        else:
+            self.x = np.asarray(x)
+            self.y = np.asarray(y)
 
         self.x_has_unc = len(self.x) > 0 and hasattr(self.x[0], "nominal_value")
         self.y_has_unc = len(self.y) > 0 and hasattr(self.y[0], "nominal_value")
@@ -238,7 +244,7 @@ class UncRegression:
             self.coefs = unp.uarray(self.popt, np.zeros_like(self.popt))
 
     @property
-    def coefs_values(self) -> np.ndarray:
+    def coefs_nom(self) -> np.ndarray:
         """Вернуть номинальные значения коэффициентов без погрешностей.
 
         Returns:
@@ -253,7 +259,7 @@ class UncRegression:
         return unp.nominal_values(self.coefs)
 
     @property
-    def coefs_errors(self) -> np.ndarray:
+    def coefs_std(self) -> np.ndarray:
         """Вернуть только погрешности коэффициентов.
 
         Returns:
@@ -272,6 +278,7 @@ class UncRegression:
         figsize: tuple[float, float] = (10, 5),
         labels: Optional[Sequence[str]] = None,
         ax: Optional[plt.Axes] = None,
+        x_ax=None,
         path: str = "",
         label: str = "",
         show_errors: bool = True,
@@ -324,20 +331,18 @@ class UncRegression:
         if labels is None:
             labels = ["", ""]
 
-        # Создание расширенного диапазона для построения линии
-        x_min, x_max = np.min(self.x_nom), np.max(self.x_nom)
-        delta = (x_max - x_min) * 0.0001
-        x_ax = np.linspace(x_min - delta, x_max + delta, 500)
+        if x_ax is None:
+            x_min, x_max = np.min(self.x_nom), np.max(self.x_nom)
+            delta = (x_max - x_min) * 0.0001
+            x_ax = np.linspace(x_min - delta, x_max + delta, 500)
         y_ax = self.func(x_ax, *self.popt)
 
-        # Обработка осей
         fig = None
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize, dpi=150)
         else:
             fig = ax.figure
 
-        # Подготовка стиля графика
         plot_kwargs = kwargs.copy()
         if "color" not in plot_kwargs:
             try:
@@ -348,14 +353,11 @@ class UncRegression:
                 color_index = len(ax.lines) % 10
                 plot_kwargs["color"] = f"C{color_index}"
 
-        # Расчет минимального визуального размера для error bars
         y_range = np.nanmax(self.y_nom) - np.nanmin(self.y_nom)
         min_visual_std = 0.02 * y_range if y_range > 0 else 1e-10
 
-        # Построение данных с или без error bars
         if show_scatter:
             if show_errors and (self.x_std is not None or self.y_std is not None):
-                # Применение минимального визуального размера для error bars
                 y_err = None
                 x_err = None
                 if self.y_std is not None:
@@ -363,7 +365,6 @@ class UncRegression:
                 if self.x_std is not None:
                     x_err = np.maximum(self.x_std, min_visual_std)
 
-                # Настройки по умолчанию для errorbar
                 errorbar_kwargs = {
                     "capsize": 3,
                     "capthick": 1.5,
@@ -382,79 +383,77 @@ class UncRegression:
                     **errorbar_kwargs,
                 )
 
-                # Использование цвета errorbar для полосы если не задан
                 if band_color is None and show_band:
                     band_color = eb[0].get_color()
             else:
-                # Создание scatter plot
                 ax.scatter(self.x_nom, self.y_nom, **plot_kwargs)
                 if band_color is None and show_band:
                     band_color = plot_kwargs.get("color", "blue")
 
+        latex_expr = ""
+        latex_coefs = ""
+        r2_str = ""
+
+        if label:
+            label = label + "\n"
+
         if show_r2:
-            r2_str = f"\nR²= {self.R2:.5f}"
-        else:
-            r2_str = ""
+            r2_str = f"R²= {self.R2:.5f}"
 
         if show_expr:
             if self.expression:
-                latex = self.expression.to_latex_expr()
-                line_label = f"{label}\n{latex}{r2_str}"
+                latex_expr = f"$y = {self.expression.to_latex_expr()}$\n"
             else:
-                raise TypeError("Задайте функцию при помощи FunctionBase1D")
-        elif show_coefficients and not show_expr:
+                print("Задайте функцию при помощи FunctionBase1D")
+
+        if show_coefficients:
             coefs = self.expression.args
-            line_label = (
-                "\n".join(
-                    f"${sym.latex(coefs[i])} = {self.coefs[i]:.2u}$".replace(
-                        "+/-", r"\pm"
-                    )
-                    for i in range(len(self.coefs))
-                )
-                + r2_str
+
+            latex_coefs = "\n".join(
+                f"${sym.latex(coefs[i])} = {self.coefs[i]:.2u}$"
+                for i in range(len(self.coefs))
             )
-        else:
-            line_label = r2_str.strip("\n")
+            latex_coefs = (
+                re.sub(
+                    r"e([+-])(\d+)",
+                    lambda m: rf"\cdot 10^{{{m.group(1)}{str(int(m.group(2)))}}}",
+                    latex_coefs,
+                )
+                + "\n"
+            )
+            latex_coefs = latex_coefs.replace("+/-", "\\pm")
 
-        ax.plot(x_ax, y_ax, label=line_label, color=plot_kwargs.get("color"))
+        label = f"{label}{latex_expr}{latex_coefs}{r2_str}"
 
-        # Построение доверительной полосы
+        ax.plot(x_ax, y_ax, label=label, color=plot_kwargs.get("color"))
+
         if show_band:
             try:
-                # Создание коррелированных неопределенностей для параметров
                 params = unc.correlated_values(self.popt, self.pcov)
 
-                # Расчет неопределенностей для предсказаний
                 y_vals = [self.func(x_val, *params) for x_val in x_ax]
 
-                # Извлечение номинальных значений и стандартных отклонений
                 y_nom_band = unp.nominal_values(y_vals)
                 y_std_band = unp.std_devs(y_vals)
 
-                # Построение доверительной полосы (95% CI)
                 ax.fill_between(
                     x_ax,
                     y_nom_band - 1.96 * y_std_band,
                     y_nom_band + 1.96 * y_std_band,
                     alpha=band_alpha,
                     color=band_color,
-                    label="95% CI" if not label else f"95% CI ({label})",
+                    label=r"95$\%$ Confidence Interval",
                 )
             except Exception as e:
                 warnings.warn(f"Confidence band could not be plotted: {e}")
 
-        # Установка подписей и сетки
         ax.set_xlabel(labels[0])
         ax.set_ylabel(labels[1])
         ax.grid(True)
 
-        # Добавление легенды
-        if add_legend and (
-            label or line_label or (show_coefficients and len(self.coefs) > 0)
-        ):
+        if label or show_band:
             ax.legend()
 
-        # Сохранение графика
         if path:
             if fig is None:
                 fig = plt.gcf()
@@ -462,7 +461,7 @@ class UncRegression:
 
         return ax
 
-    def predict(self, x_new: Any) -> Any:
+    def predict_n(self, x_new: Any) -> Any:
         """Предсказать значения для новых данных x.
 
         Args:
@@ -481,9 +480,10 @@ class UncRegression:
             >>> reg = UncRegression([0, 1], [0, 1])
             >>> reg.predict([0.5])
         """
+
         return self.func(x_new, *self.popt)
 
-    def predict_with_uncertainty(self, x_new: Any) -> np.ndarray:
+    def predict(self, x_new: Any) -> np.ndarray:
         """Получить предсказания с учетом неопределенностей параметров.
 
         Args:
@@ -502,13 +502,14 @@ class UncRegression:
             >>> reg = UncRegression([0, 1], [0, 1])
             >>> reg.predict_with_uncertainty([0.5])
         """
-        # Создание коррелированных неопределенностей для параметров
         params = unc.correlated_values(self.popt, self.pcov)
 
-        # Расчет предсказаний с неопределенностями
-        y_pred = [self.func(x_val, *params) for x_val in x_new]
-
-        return np.array(y_pred)
+        if hasattr(x_new, "__iter__"):
+            y_pred = [self.func(x_val, *params) for x_val in x_new]
+            return np.array(y_pred)
+        else:
+            y_pred = self.func(x_new, *params)
+            return y_pred
 
     def find_x(
         self,
@@ -547,7 +548,23 @@ class UncRegression:
             >>> reg = UncRegression([0, 1], [0, 1])
             >>> reg.find_x(unc.ufloat(0.5, 0.01), x0=0.5)
         """
-        args_nominal = self.coefs_values
+        if hasattr(y, "__iter__"):
+            return np.array(
+                [
+                    self.find_x(
+                        y0,
+                        x0=x0,
+                        xtol_diff=xtol_diff,
+                        xtol_root=xtol_root,
+                        maxiter=maxiter,
+                        solve_numerically=solve_numerically,
+                        **kwargs,
+                    )
+                    for y0 in y
+                ]
+            )
+
+        args_nominal = self.coefs_nom
 
         if isinstance(y, unc.core.Variable):
             yval = y.nominal_value
@@ -564,7 +581,7 @@ class UncRegression:
             x0 = x0
 
         if self.expression and not solve_numerically:
-            sols = self.expression.find_sols(y=yval)
+            sols = self.expression.find_sols(y=y)
 
             if hasattr(sols, "__iter__"):
                 if len(sols) == 1:
@@ -578,60 +595,42 @@ class UncRegression:
             if x0 is None:
                 raise TypeError("Setup the x0")
 
-            def func(x: float, *args: Any) -> float:
-                """Вычислить разницу между моделью и целевым значением.
+            trys = 5
+            i = 0
+            while i < trys:
+                result_root = opt.root_scalar(
+                    f=lambda x, *args: self.func(x, *args) - yval,
+                    x0=x0,
+                    xtol=xtol_root,
+                    maxiter=maxiter,
+                    args=tuple(args_nominal),
+                    **kwargs,
+                )
 
-                Args:
-                    x (float): Значение аргумента.
-                    *args: Коэффициенты модели.
+                if not result_root.converged:
+                    xtol_root *= 100
+                    # print(f"Root not converged: {result_root.flag}, trying again")
+                i += 1
+            # if not result_root.converged:
+            #     raise TypeError(f"Root not converged: {result_root.flag}")
 
-                Returns:
-                    float: Разница между значением модели и целевым значением.
+            fun = FunctionBase1D(self.expression.expr_str).lambda_fun
+            coefs_nom = unc.unumpy.nominal_values(self.coefs)
+            coefs_std = unc.unumpy.std_devs(self.coefs)
 
-                Raises:
-                    None.
+            def f_vec(v):
+                x = v[0]
+                params = v[1:]
+                return fun(x, *params)
 
-                Side Effects:
-                    None.
-                """
-                return self.func(x, *args) - yval
+            v0 = np.concatenate(([x0], coefs_nom))
 
-            result_root = opt.root_scalar(
-                f=func,
-                x0=x0,
-                xtol=xtol_root,
-                maxiter=maxiter,
-                args=tuple(args_nominal),
-                **kwargs,
-            )
+            grad = opt.approx_fprime(v0, f_vec, epsilon=1e-8)
 
-            if not result_root.converged:
-                raise TypeError(f"Root not converged: {result_root.flag}")
+            dy = grad[0]
+            dcoefs = grad[1:]
 
-            result_diff = diff.derivative(
-                f=func,
-                x=result_root.root,
-                args=tuple(args_nominal),
-                tolerances={"atol": xtol_diff},
-                maxiter=maxiter,
-            )
-
-            if not result_diff.success:
-                error = {
-                    0: "The algorithm converged to the specified tolerances.",
-                    -1: "The error estimate increased, so iteration was terminated.",
-                    -2: "The maximum number of iterations was reached.",
-                    -3: "A non-finite value was encountered.",
-                    -4: "Iteration was terminated by callback.",
-                    1: "The algorithm is proceeding normally (in callback only).",
-                }
-                raise TypeError(error[result_diff.status])
-
-            dy = result_diff.df
-            dytol = (
-                result_diff.error
-            )  # пока не понял, как правильно учитывать погрешность дифференцирования
-            dxtol = ytol / dy
+            dxtol = np.sqrt(ytol**2 + np.sum((dcoefs * coefs_std) ** 2)) / dy
 
             xtol_summ = np.sqrt(xtol_root**2 + xtol_diff**2 + dxtol**2 + xtol**2)
 

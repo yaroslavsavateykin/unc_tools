@@ -83,19 +83,30 @@ class FunctionBase1D:
         Side Effects:
             Caches solutions for reuse.
         """
-        try:
-            solution = sym.solvers.solve(self.expr_sym - 0, sym.Symbol("x"))
+        # try:
+        #     solution = sym.solvers.solve(self.expr_sym - 0, sym.Symbol("x"))
+        #
+        #     # if not solution:
+        #     #    raise TypeError("Cant find analytical solution for given expression")
+        #
+        #     if self._show_complex:
+        #         return solution
+        #     else:
+        #         solution = [x for x in solution if not x.is_imaginary]
+        #         return solution
+        # except:
+        #     return []
+        #
+        solution = sym.solvers.solve(self.expr_sym - 0, sym.Symbol("x"))
 
-            # if not solution:
-            #    raise TypeError("Cant find analytical solution for given expression")
+        # if not solution:
+        #    raise TypeError("Cant find analytical solution for given expression")
 
-            if self._show_complex:
-                return solution
-            else:
-                solution = [x for x in solution if not x.is_imaginary]
-                return solution
-        except:
-            return []
+        if self._show_complex:
+            return solution
+        else:
+            solution = [x for x in solution if not x.is_imaginary]
+            return solution
 
     def find_sols(
         self, y: Union[int, float, sym.core.expr.Expr] = 0
@@ -118,18 +129,26 @@ class FunctionBase1D:
         Side Effects:
             None.
         """
-        # self.expr -= y
 
-        new_expr = FunctionBase1D(self.expr_str)
-        new_expr.expr -= y
-        # coefs = self.args + [y]
-        # print(coefs)
+        if isinstance(y, unc.core.Variable) or isinstance(y, unc.core.AffineScalarFunc):
+            new_expr = FunctionBase1D(self.expr_str + " - p_100")
 
-        if self._added_coefs:
-            new_expr.add_coefs(self.coefs)
+            list_coefs = list(self.coefs) + [y]
+            if self._added_coefs:
+                new_expr.add_coefs(list_coefs)
+
+        else:
+            if isinstance(y, str):
+                y = sym.parse_expr(y)
+            new_expr = FunctionBase1D(self.expr_str)
+            new_expr.expr_sym -= y
+            if self._added_coefs:
+                new_expr.add_coefs(self.coefs)
 
         if len(new_expr.sols) > 1 and hasattr(new_expr.sols, "__iter__"):
             return new_expr.sols
+        elif len(new_expr.sols) == 0:
+            return []
         else:
             return new_expr.sols[0]
 
@@ -149,7 +168,7 @@ class FunctionBase1D:
         lambda_args = [sym.Symbol("x")] + self.args
         return sym.lambdify(lambda_args, self.expr_sym, "numpy")
 
-    def show_complex(self) -> "FunctionBase1D":
+    def show_complex(self, show: bool = False) -> "FunctionBase1D":
         """Toggle the display of complex solutions.
 
         Returns:
@@ -161,7 +180,8 @@ class FunctionBase1D:
         Side Effects:
             Flips the `_show_complex` flag controlling solution filtering.
         """
-        self._show_complex = not self._show_complex
+        self._show_complex = show
+
         return self
 
     @staticmethod
@@ -221,8 +241,14 @@ class FunctionBase1D:
             raise TypeError("Number of args is not the same as numer of coefs")
 
         self.coefs = coefs
-        
-        if any([isinstance(x, unc.core.Variable) for x in coefs]):
+
+        if any(
+            [
+                isinstance(x, unc.core.Variable)
+                or isinstance(x, unc.core.AffineScalarFunc)
+                for x in coefs
+            ]
+        ):
             self._unc_coefs = True
 
         coefs_dict = {}
@@ -235,7 +261,9 @@ class FunctionBase1D:
             std_coefs_dict = {}
             for key in coefs_dict:
                 delta = sym.Symbol(f"Delta_{str(key)}")
-                if isinstance(coefs_dict[key], unc.core.Variable):
+                if isinstance(coefs_dict[key], unc.core.Variable) or isinstance(
+                    coefs_dict[key], unc.core.AffineScalarFunc
+                ):
                     nominal_coefs_dict[key] = coefs_dict[key].nominal_value
                     std_coefs_dict[delta] = coefs_dict[key].std_dev
                 else:
@@ -267,37 +295,7 @@ class FunctionBase1D:
 
             # making lambda function
             def wrap_lambdify(func: Callable, *coefs: Any) -> Callable:
-                """Bind coefficients to a generated lambda function.
-
-                Args:
-                    func (Callable): Base callable produced by sympy.lambdify.
-                    *coefs (Any): Coefficients to fix in the returned callable.
-
-                Returns:
-                    Callable: Function accepting ``x`` and using the bound coefficients.
-
-                Raises:
-                    None.
-
-                Side Effects:
-                    None.
-                """
-
                 def new_lambda(x: Any) -> Any:
-                    """Evaluate the wrapped function with preset coefficients.
-
-                    Args:
-                        x (Any): Input value for the independent variable.
-
-                    Returns:
-                        Any: Result of evaluating the function at ``x``.
-
-                    Raises:
-                        None.
-
-                    Side Effects:
-                        None.
-                    """
                     return func(x, *coefs)
 
                 return new_lambda
@@ -310,7 +308,9 @@ class FunctionBase1D:
             # making str expr
             self.expr_unc = self.expr_str
             for key in coefs_dict:
-                if isinstance(coefs_dict[key], unc.core.Variable):
+                if isinstance(coefs_dict[key], unc.core.Variable) or isinstance(
+                    coefs_dict[key], unc.core.AffineScalarFunc
+                ):
                     replacement = f"unc.ufloat({coefs_dict[key].nominal_value},{coefs_dict[key].std_dev})"
                 else:
                     replacement = str(coefs_dict[key])
@@ -357,7 +357,7 @@ class FunctionBase1D:
 
                 latex = latex.replace(sym.latex(self.args[i]), replacement)
 
-            latex = "$y = " + latex.replace("+/-", r" \pm ") + "$"
+            latex = latex.replace("+/-", r" \pm ")
         latex = re.sub(
             r"e([+-])(\d+)",
             lambda m: rf"\cdot 10^{{{m.group(1)}{str(int(m.group(2)))}}}",
@@ -418,7 +418,7 @@ class FunctionBase1D:
 
         return latex_sols
 
-    def to_latex_sols(self, show_unc: bool = True, y: Any = None) -> str:
+    def to_latex_sols(self, y: Any = None, show_unc: bool = False) -> str:
         """Format solutions as a LaTeX array with optional target offset.
 
         Generates indexed solution strings, optionally subtracting a provided target
@@ -441,9 +441,20 @@ class FunctionBase1D:
 
         if not y:
             latex_sols = self._calculate_sols(show_unc=show_unc)
-        else:
+        elif isinstance(y, str):
+            new_expr = FunctionBase1D(str(self.expr_sym) + " - " + y)
+            latex_sols = new_expr._calculate_sols(show_unc=show_unc)
+        elif isinstance(y, unc.core.Variable) or isinstance(
+            y, unc.core.AffineScalarFunc
+        ):
             new_expr = FunctionBase1D(self.expr_str + " - A100")
             new_expr.add_coefs(self.coefs + [y])
+            latex_sols = new_expr._calculate_sols(show_unc=show_unc)
+        else:
+            new_expr = FunctionBase1D(self.expr_str + "-" + str(y))
+            if self._added_coefs:
+                new_expr.add_coefs(self.coefs)
+
             latex_sols = new_expr._calculate_sols(show_unc=show_unc)
 
         for i, sol in enumerate(latex_sols):
@@ -483,7 +494,7 @@ class FunctionBase1D:
 
         new_func = FunctionBase1D(new_expr_str)
 
-        if any(self.coefs):
+        if self._added_coefs:
             new_func.add_coefs(self.coefs)
 
         return new_func
