@@ -24,6 +24,13 @@ pip install uncertainty-tools
 uv pip install uncertainty-tools
 ```
 
+--- 
+
+## Colab notebooks
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yaroslavsavateykin/unc_tools/blob/main/notebooks/start.ipynb)
+
+
 ---
 
 ## Usage
