@@ -3,4 +3,8 @@ venv/
 unc_tools.egg-info/
 .pytest_cache/
 build/
+dist/
 .ipynb_checkpoints/
+
+__pycache__/
+*.py[cod]
