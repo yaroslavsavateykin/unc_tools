@@ -3,43 +3,46 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "unc_tools"
-version = "0.1.0"
+name = "uncertainty_tools"
+version = "0.0.1"
+description = "Utilities for uncertainty-aware regression and symbolic function helpers."
 readme = "README.md"
-requires-python = ">=3.11"
-authors = [{ name = "Savateykin Yaroslav", email = "yaroslavsavateykin@yandex.ru" }]
+requires-python = ">=3.10"
+authors = [{ name = "Savateykin Yaroslav", email = "yaroslavsavateikinwork@yandex.ru" }]
 license = { file = "LICENSE" }
-classifiers = ["License :: OSI Approved :: MIT License"]
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Mathematics",
+  "Typing :: Typed",
+]
 dependencies = [
-  "contourpy==1.3.3",
-  "cycler==0.12.1",
-  "fonttools==4.59.2",
-  "kiwisolver==1.4.9",
-  "matplotlib==3.10.6",
-  "mpmath==1.3.0",
-  "narwhals==2.5.0",
-  "numpy==2.3.3",
-  "packaging==25.0",
-  "pandas==2.3.2",
-  "pillow==11.3.0",
-  "pyparsing==3.2.4",
-  "python-dateutil==2.9.0.post0",
-  "pytz==2025.2",
-  "scipy==1.16.2",
-  "six==1.17.0",
-  "sympy==1.14.0",
-  "tzdata==2025.2",
-  "uncertainties==3.2.3",
+  "matplotlib>=3.7",
+  "numpy>=1.23",
+  "pandas>=1.5",
+  "scipy>=1.10",
+  "sympy>=1.11",
+  "uncertainties>=3.1",
 ]
 
 [project.optional-dependencies]
-dev = []
-test = []
-docs = []
+test = ["pytest>=7.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["unc_tools"]
-include = ["LICENSE"]
+include = ["unc_tools/py.typed", "LICENSE"]
 
 [tool.hatch.build.targets.sdist]
-include = ["LICENSE"]
+include = ["LICENSE", "README.md", "pyproject.toml", "unc_tools/**"]
+exclude = [
+  "build/**",
+  "notebooks/**",
+  "tests/**",
+  "uv.lock",
+  "venv/**",
+  "**/__pycache__/**",
+]

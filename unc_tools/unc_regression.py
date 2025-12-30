@@ -1,46 +1,43 @@
+"""Regression utilities with uncertainty propagation."""
+
+from __future__ import annotations
+
+import re
 import uuid
+import warnings
+from typing import Callable, Sequence
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import scipy.optimize as opt
+import sympy as sym
 import uncertainties as unc
 import uncertainties.unumpy as unp
-import scipy.differentiate as diff
-import scipy.optimize as opt
-import warnings
-import sympy as sym
-import re
-
-from typing import Callable, Union, Any, Sequence, Optional
+from matplotlib.axes import Axes
 
 from .default_functions import FunctionBase1D, Poly
+from .exceptions import DataError, InitialGuessError, ModelTypeError
+
+__all__ = ["UncRegression"]
+
+Uncertain = unc.core.AffineScalarFunc | unc.core.Variable
+Numeric = float | int | np.number
+DataInput = Sequence[Numeric | Uncertain] | np.ndarray | pd.Series
+IndexSlice = slice | Sequence[int] | np.ndarray
+Solution = sym.Expr | Uncertain | tuple[Uncertain, Uncertain]
+PredictInput = Numeric | Uncertain | Sequence[Numeric | Uncertain] | np.ndarray
 
 
 class UncRegression:
-    """
-    Класс для выполнения регрессионного анализа с поддержкой неопределенностей
-
-    Attributes:
-        x, y : исходные данные
-        func : функция для фитирования
-        coefs : коэффициенты с неопределенностями
-        R2 : коэффициент детерминации
-    """
+    """Perform regression analysis with uncertainty-aware data and parameters."""
 
     @staticmethod
     def latex_style(tex: bool) -> None:
-        """Настроить стиль matplotlib для вывода LaTeX.
+        """Configure matplotlib to use LaTeX text rendering.
 
         Args:
-            tex (bool): Флаг использования LaTeX при рендеринге текста.
-
-        Returns:
-            None
-
-        Raises:
-            None.
-
-        Side Effects:
-            Изменяет глобальные параметры `matplotlib.rcParams`.
+            tex: Whether to enable LaTeX text rendering.
         """
         if tex:
             plt.rcParams.update(
@@ -62,38 +59,33 @@ class UncRegression:
                     "text.usetex": False,
                     "font.family": "sans-serif",
                     "font.sans-serif": ["DejaVu Sans", "Arial", "Helvetica"],
-                    "pgf.texsystem": None,  # или можно удалить этот параметр
+                    "pgf.texsystem": None,  # Can be removed to restore defaults.
                 }
             )
+        return None
 
     def __init__(
         self,
-        x: Union[Sequence[Any], np.ndarray, pd.Series],
-        y: Union[Sequence[Any], np.ndarray, pd.Series],
-        func: Union[Callable[..., Any], FunctionBase1D, None] = None,
-        sl=None,
+        x: DataInput,
+        y: DataInput,
+        func: Callable[..., Numeric | np.ndarray | Uncertain]
+        | FunctionBase1D
+        | str
+        | None = None,
+        sl: IndexSlice | None = None,
     ) -> None:
-        """Инициализировать регрессию с поддержкой неопределенностей.
-
-        Принимает входные данные, выбирает модель (пользовательскую или полиномиальную
-        по умолчанию), извлекает номинальные значения/погрешности и запускает процесс
-        фитирования.
+        """Initialize regression with uncertainty-aware inputs.
 
         Args:
-            x (Sequence[Any] | np.ndarray | pd.Series): Значения аргумента.
-            y (Sequence[Any] | np.ndarray | pd.Series): Значения функции.
-            func (Callable[..., Any] | FunctionBase1D | None): Пользовательская модель
-                или объект `FunctionBase1D`; если None, используется линейная модель.
-
-        Returns:
-            None
+            x: Input data for the independent variable.
+            y: Input data for the dependent variable.
+            func: Callable model, symbolic `FunctionBase1D`, expression string, or
+                None for a linear polynomial.
+            sl: Optional slice or index sequence applied to the inputs.
 
         Raises:
-            TypeError: Если тип функции неподдерживаемый.
-            ValueError: Если входные массивы пусты.
-
-        Side Effects:
-            Выполняет фитирование и инициализирует внутренние метрики.
+            ModelTypeError: If the model type is unsupported.
+            DataError: If the input arrays are empty.
         """
         if issubclass(type(func), FunctionBase1D):
             self.func = func.lambda_fun
@@ -101,16 +93,19 @@ class UncRegression:
         elif isinstance(func, Callable):
             self.func = func
             self.expression = None
+        elif isinstance(func, str):
+            self.expression = FunctionBase1D(func)
+            self.func = self.expression.lambda_fun
         elif func is None:
             self.expression = Poly(1)
             self.func = self.expression.lambda_fun
         else:
-            raise TypeError(
-                "func argument must be either Callable or child class of FunctionBase1D"
+            raise ModelTypeError(
+                "func must be a callable, FunctionBase1D instance, expression string, or None."
             )
 
         if len(x) == 0 or len(y) == 0:
-            raise ValueError("Input arrays cannot be empty")
+            raise DataError("Input arrays cannot be empty.")
 
         if sl is not None:
             self.x = np.asarray(x)[sl]
@@ -125,25 +120,10 @@ class UncRegression:
         self._extract_values()
 
         self._fit()
+        return None
 
     def _extract_values(self) -> None:
-        """Извлечь номинальные значения и неопределенности входных данных.
-
-        Преобразует входные массивы к numpy, отделяет номинальные значения и
-        стандартные отклонения, обрабатывая возможные ошибки приведения типов.
-
-        Args:
-            None.
-
-        Returns:
-            None
-
-        Raises:
-            TypeError: Если элементы нельзя преобразовать к числам.
-
-        Side Effects:
-            Устанавливает атрибуты `x_nom`, `y_nom`, `x_std`, `y_std`.
-        """
+        """Extract nominal values and uncertainties from the input data."""
         try:
             self.x_nom = (
                 unp.nominal_values(self.x)
@@ -163,27 +143,12 @@ class UncRegression:
             self.x_std = None
             self.y_std = None
 
-        # Обработка нулевых неопределенностей
+        # Replace zero uncertainties with small positive values.
         self._handle_zero_uncertainties()
+        return None
 
     def _handle_zero_uncertainties(self) -> None:
-        """Заменить нулевые неопределенности на малые значения.
-
-        Проходит по рассчитанным стандартным отклонениям и подставляет минимальные
-        ненулевые значения, предотвращая проблемы при последующих вычислениях.
-
-        Args:
-            None.
-
-        Returns:
-            None
-
-        Raises:
-            None.
-
-        Side Effects:
-            Модифицирует массивы неопределенностей и выводит предупреждения.
-        """
+        """Replace zero uncertainties with small positive values."""
         for arr, name in zip([self.x_std, self.y_std], ["x", "y"]):
             if arr is not None and np.any(arr == 0):
                 non_zero = arr[arr > 0]
@@ -192,26 +157,10 @@ class UncRegression:
                 warnings.warn(
                     f"Zero uncertainties in {name} replaced with {replacement:.1e}"
                 )
+        return None
 
     def _fit(self) -> None:
-        """Выполнить регрессионный анализ с учетом неопределенностей.
-
-        Пытается выполнить взвешенный фит, оценивает остатки и коэффициент детерминации
-        и сохраняет параметры как массивы неопределенных значений.
-
-        Args:
-            None.
-
-        Returns:
-            None
-
-        Raises:
-            RuntimeError: Если оптимизация не сходится (перехватывается и переводится в предупреждение).
-            TypeError: Если модель не принимает переданные аргументы.
-
-        Side Effects:
-            Изменяет атрибуты `popt`, `pcov`, `coefs`, `R2` и может добавлять коэффициенты в выражение.
-        """
+        """Fit the model and compute uncertainty-aware coefficients."""
         try:
             if self.y_std is not None:
                 self.popt, self.pcov = opt.curve_fit(
@@ -238,95 +187,64 @@ class UncRegression:
             self.coefs = unp.uarray(self.popt, np.sqrt(np.diag(self.pcov)))
             if self.expression:
                 self.expression.add_coefs(self.coefs)
-        except:
+        except (TypeError, ValueError) as exc:
+            warnings.warn(f"Coefficient uncertainties could not be applied: {exc}")
             if self.expression:
                 self.expression.add_coefs(self.popt)
             self.coefs = unp.uarray(self.popt, np.zeros_like(self.popt))
+        return None
 
     @property
     def coefs_nom(self) -> np.ndarray:
-        """Вернуть номинальные значения коэффициентов без погрешностей.
-
-        Returns:
-            np.ndarray: Массив номинальных значений коэффициентов.
-
-        Raises:
-            None.
-
-        Side Effects:
-            None.
-        """
+        """Return nominal coefficient values without uncertainties."""
         return unp.nominal_values(self.coefs)
 
     @property
     def coefs_std(self) -> np.ndarray:
-        """Вернуть только погрешности коэффициентов.
-
-        Returns:
-            np.ndarray: Стандартные отклонения коэффициентов.
-
-        Raises:
-            None.
-
-        Side Effects:
-            None.
-        """
+        """Return coefficient standard deviations."""
         return unp.std_devs(self.coefs)
 
     def plot(
         self,
         figsize: tuple[float, float] = (10, 5),
-        labels: Optional[Sequence[str]] = None,
-        ax: Optional[plt.Axes] = None,
-        x_ax=None,
+        labels: Sequence[str] | None = None,
+        ax: Axes | None = None,
+        x_ax: Sequence[float] | np.ndarray | None = None,
         path: str = "",
         label: str = "",
         show_errors: bool = True,
         show_band: bool = False,
         show_scatter: bool = True,
         band_alpha: float = 0.2,
-        band_color: Optional[str] = None,
+        band_color: str | None = None,
         add_legend: bool = True,
         show_expr: bool = True,
         show_coefficients: bool = False,
         show_r2: bool = True,
-        **kwargs: Any,
-    ) -> plt.Axes:
-        """Построить график результатов регрессии.
-
-        Строит линию регрессии, опционально отображает точки с погрешностями, полосу
-        доверия и текстовые аннотации с выражением, коэффициентами и значением R².
+        **kwargs: object,
+    ) -> Axes:
+        """Plot the regression results.
 
         Args:
-            figsize (tuple[float, float]): Размер фигуры в дюймах.
-            labels (Sequence[str] | None): Подписи осей ``[xlabel, ylabel]``.
-            ax (plt.Axes | None): Существующая ось для построения; если None, создается новая.
-            path (str): Путь сохранения рисунка; пустая строка отключает сохранение.
-            label (str): Префикс для подписей в легенде.
-            show_errors (bool): Отображать error bars при наличии неопределенностей.
-            show_band (bool): Показывать доверительную полосу.
-            show_scatter (bool): Показывать точки наблюдений.
-            band_alpha (float): Прозрачность доверительной полосы.
-            band_color (str | None): Цвет доверительной полосы.
-            add_legend (bool): Добавлять легенду.
-            show_expr (bool): Отображать аналитическое выражение в легенде.
-            show_coefficients (bool): Выводить коэффициенты в легенде.
-            show_r2 (bool): Добавлять значение R² в подписи.
-            **kwargs (Any): Дополнительные параметры для `plot` или `errorbar`.
+            figsize: Figure size in inches.
+            labels: Axis labels as ``[xlabel, ylabel]``.
+            ax: Existing axes to draw on; creates one when None.
+            x_ax: Optional x-axis grid for the fitted curve.
+            path: Output path for saving the figure; empty disables saving.
+            label: Prefix for legend entries.
+            show_errors: Whether to show error bars when uncertainties are present.
+            show_band: Whether to show the confidence band.
+            show_scatter: Whether to draw the observation points.
+            band_alpha: Alpha for the confidence band fill.
+            band_color: Color for the confidence band.
+            add_legend: Whether to add a legend.
+            show_expr: Whether to include the analytic expression in the legend.
+            show_coefficients: Whether to include coefficients in the legend.
+            show_r2: Whether to include the R-squared value in the legend.
+            **kwargs: Additional keyword arguments forwarded to matplotlib.
 
         Returns:
-            plt.Axes: Ось с построенным графиком.
-
-        Raises:
-            TypeError: Если выражение не задано при запросе отображения.
-            RuntimeError: Если сохранение файла завершается ошибкой.
-
-        Side Effects:
-            Создает график, может сохранять файл и выводить предупреждения.
-
-        Examples:
-            >>> reg = UncRegression([0, 1], [0, 1])
-            >>> _ = reg.plot(show_band=False)
+            The axes containing the plot.
         """
         if labels is None:
             labels = ["", ""]
@@ -404,7 +322,16 @@ class UncRegression:
             if self.expression:
                 latex_expr = f"$y = {self.expression.to_latex_expr()}$\n"
             else:
-                print("Задайте функцию при помощи FunctionBase1D")
+                warnings.warn(
+                    "Expression display requested but no expression is available."
+                )
+                show_expr = False
+
+        if show_coefficients and not self.expression:
+            warnings.warn(
+                "Coefficient display requested but no expression is available."
+            )
+            show_coefficients = False
 
         if show_coefficients:
             coefs = self.expression.args
@@ -451,7 +378,7 @@ class UncRegression:
         ax.set_ylabel(labels[1])
         ax.grid(True)
 
-        if label or show_band:
+        if add_legend and (label or show_band):
             ax.legend()
 
         if path:
@@ -461,46 +388,25 @@ class UncRegression:
 
         return ax
 
-    def predict_n(self, x_new: Any) -> Any:
-        """Предсказать значения для новых данных x.
+    def predict_n(self, x_new: PredictInput) -> np.ndarray | Numeric | Uncertain:
+        """Predict values for new inputs using nominal parameters.
 
         Args:
-            x_new (Any): Значения аргумента для прогноза.
+            x_new: Input values for prediction.
 
         Returns:
-            Any: Предсказанные значения модели.
-
-        Raises:
-            TypeError: Если модель не принимает переданные аргументы.
-
-        Side Effects:
-            None.
-
-        Examples:
-            >>> reg = UncRegression([0, 1], [0, 1])
-            >>> reg.predict([0.5])
+            Predicted values from the fitted model.
         """
-
         return self.func(x_new, *self.popt)
 
-    def predict(self, x_new: Any) -> np.ndarray:
-        """Получить предсказания с учетом неопределенностей параметров.
+    def predict(self, x_new: PredictInput) -> np.ndarray | Uncertain:
+        """Predict values with uncertainty propagation from fit parameters.
 
         Args:
-            x_new (Any): Значения аргумента для оценки.
+            x_new: Input values for prediction.
 
         Returns:
-            np.ndarray: Предсказанные значения с неопределенностями.
-
-        Raises:
-            TypeError: Если модель не принимает переданные аргументы.
-
-        Side Effects:
-            None.
-
-        Examples:
-            >>> reg = UncRegression([0, 1], [0, 1])
-            >>> reg.predict_with_uncertainty([0.5])
+            Predicted values with parameter uncertainty propagated.
         """
         params = unc.correlated_values(self.popt, self.pcov)
 
@@ -513,40 +419,32 @@ class UncRegression:
 
     def find_x(
         self,
-        y: Union[unc.core.Variable, float],
-        x0: Union[unc.core.Variable, float, None] = None,
+        y: Uncertain | Numeric,
+        x0: Uncertain | Numeric | None = None,
         xtol_root: float = 1e-20,
         xtol_diff: float = 1e-20,
         maxiter: int = 500,
         # solve_numerically: bool = False,
-        **kwargs: Any,
-    ) -> Any:
-        """Найти значение x для заданного y с учетом неопределенности.
+        **kwargs: object,
+    ) -> np.ndarray | Solution | list[Solution]:
+        """Solve for x given a target y value.
 
-        Использует аналитические решения при наличии выражения или численное решение
-        с помощью `scipy.optimize.root_scalar`, оценивая погрешность результата.
+        Uses analytical solutions when a symbolic expression is available; otherwise
+        uses numerical root finding with uncertainty propagation.
 
         Args:
-            y (unc.core.Variable | float): Значение функции, может содержать погрешность.
-            x0 (unc.core.Variable | float | None): Начальное приближение для численного решения.
-            xtol_root (float): Допуск для метода root-finding.
-            xtol_diff (float): Допуск для численного дифференцирования.
-            maxiter (int): Максимальное число итераций.
-            solve_numerically (bool): Принудительно использовать численный метод.
-            **kwargs (Any): Дополнительные аргументы для `root_scalar`.
+            y: Target y value, optionally with uncertainty.
+            x0: Initial guess for numerical root finding.
+            xtol_root: Tolerance for the root-finding step.
+            xtol_diff: Tolerance used for numerical differentiation.
+            maxiter: Maximum number of iterations.
+            **kwargs: Additional arguments forwarded to `scipy.optimize.root_scalar`.
 
         Returns:
-            Any: Аналитическое решение, список решений или `ufloat` для численного случая.
+            Analytical solutions, a list of solutions, or an uncertainty-aware root.
 
         Raises:
-            TypeError: Если не задано начальное значение x0 или решение не сходится.
-
-        Side Effects:
-            None.
-
-        Examples:
-            >>> reg = UncRegression([0, 1], [0, 1])
-            >>> reg.find_x(unc.ufloat(0.5, 0.01), x0=0.5)
+            InitialGuessError: If numerical solving is required and no initial guess is provided.
         """
         if hasattr(y, "__iter__"):
             return np.array(
@@ -566,16 +464,14 @@ class UncRegression:
 
         args_nominal = self.coefs_nom
 
-        if isinstance(y, unc.core.Variable) or isinstance(y, unc.core.AffineScalarFunc):
+        if isinstance(y, (unc.core.Variable, unc.core.AffineScalarFunc)):
             yval = y.nominal_value
             ytol = y.std_dev
         else:
             yval = y
             ytol = 0
 
-        if isinstance(x0, unc.core.Variable) or isinstance(
-            x0, unc.core.AffineScalarFunc
-        ):
+        if isinstance(x0, (unc.core.Variable, unc.core.AffineScalarFunc)):
             xtol = x0.std_dev
             x0 = x0.nominal_value
         else:
@@ -595,7 +491,7 @@ class UncRegression:
 
         else:
             if x0 is None:
-                raise TypeError("Setup the x0")
+                raise InitialGuessError("An initial guess x0 is required for numerical solving.")
 
             trys = 5
             i = 0
@@ -616,7 +512,10 @@ class UncRegression:
             # if not result_root.converged:
             #     raise TypeError(f"Root not converged: {result_root.flag}")
 
-            fun = FunctionBase1D(self.expression.expr_str).lambda_fun
+            if self.expression is None:
+                fun = self.func
+            else:
+                fun = FunctionBase1D(self.expression.expr_str).lambda_fun
             coefs_nom = unc.unumpy.nominal_values(self.coefs)
             coefs_std = unc.unumpy.std_devs(self.coefs)
 
@@ -640,22 +539,13 @@ class UncRegression:
             return unc.ufloat(result_root.root, xtol_summ)
 
     def to_df(self, export_plot: bool = False) -> pd.DataFrame:
-        """Преобразовать результаты регрессии в DataFrame.
-
-        Формирует таблицу исходных данных и неопределенностей или, при запросе,
-        возвращает сетку для построения кривой фита.
+        """Convert regression results to a DataFrame.
 
         Args:
-            export_plot (bool): Если True, возвращает данные для построения линии фита.
+            export_plot: If True, return the fitted curve grid instead of input data.
 
         Returns:
-            pd.DataFrame: Таблица данных или точки аппроксимации.
-
-        Raises:
-            None.
-
-        Side Effects:
-            None.
+            DataFrame containing the input data or fitted curve samples.
         """
         if export_plot:
             x_min, x_max = np.min(self.x_nom), np.max(self.x_nom)
@@ -684,27 +574,21 @@ class UncRegression:
 
     def to_csv(
         self,
-        filename: Optional[str] = None,
+        filename: str | None = None,
         export_plot: bool = False,
-        *args: Any,
-        **kwargs: Any,
+        *args: object,
+        **kwargs: object,
     ) -> None:
-        """Экспортировать результаты регрессии в CSV файл.
+        """Export regression results to a CSV file.
 
         Args:
-            filename (str | None): Имя файла; при None генерируется случайное.
-            export_plot (bool): Экспортировать данные аппроксимации вместо исходных.
-            *args: Дополнительные позиционные аргументы для `DataFrame.to_csv`.
-            **kwargs: Дополнительные ключевые аргументы для `DataFrame.to_csv`.
-
-        Returns:
-            None
+            filename: Output filename; generates a random name when None.
+            export_plot: Export fitted curve data instead of the input data.
+            *args: Positional arguments forwarded to `DataFrame.to_csv`.
+            **kwargs: Keyword arguments forwarded to `DataFrame.to_csv`.
 
         Raises:
-            OSError: При ошибке записи файла.
-
-        Side Effects:
-            Создает CSV-файл на диске и выводит сообщение о сохранении при автогенерации имени.
+            OSError: If the file cannot be written.
         """
         df = self.to_df(export_plot=export_plot)
 
@@ -713,3 +597,4 @@ class UncRegression:
             print(f"DataFrame was saved to {filename}")
 
         df.to_csv(filename, *args, **kwargs)
+        return None

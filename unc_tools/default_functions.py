@@ -1,38 +1,39 @@
-from ast import Call, Dict, Raise, expr
+"""Symbolic helper utilities with uncertainty-aware coefficients."""
+
+from __future__ import annotations
+
 from functools import cached_property
-from math import exp
-from os import replace
-from typing import Callable, List, Union, Any, Optional
-from matplotlib.pyplot import show
-import sympy as sym
-from sympy.matrices.expressions.matmul import new
-import uncertainties as unc
+from typing import Callable, Sequence
+
 import numpy as np
 import re
+import sympy as sym
+import uncertainties as unc
+
+from .exceptions import ExpressionError
+
+__all__ = ["FunctionBase1D", "Hyper", "Poly"]
+
+Uncertain = unc.core.AffineScalarFunc | unc.core.Variable
+Numeric = float | int | np.number
+Coefficient = sym.Expr | Numeric | Uncertain
+CoefficientsInput = Sequence[Coefficient] | np.ndarray
+Solution = sym.Expr | Uncertain | tuple[Uncertain, Uncertain]
+LambdaReturn = float | complex | np.ndarray | Uncertain
+InputValue = Numeric | np.ndarray | Uncertain
 
 
 class FunctionBase1D:
-    def __init__(self, expr_str: str = "") -> None:
-        """Initialize a one-dimensional symbolic expression handler.
+    """Represent a one-dimensional symbolic expression with optional uncertainty data."""
 
-        Parses the provided expression string, extracts coefficients (excluding ``x``),
-        and initializes flags controlling uncertainty handling and complex solution
-        visibility without modifying the expression logic.
+    def __init__(self, expr_str: str = "") -> None:
+        """Initialize the expression and extract coefficient symbols.
 
         Args:
-            expr_str (str): String representation of the sympy expression to manage.
-
-        Returns:
-            None
+            expr_str: String representation of the sympy expression to manage.
 
         Raises:
             sym.SympifyError: If the expression string cannot be parsed.
-
-        Side Effects:
-            Sets internal state for later calculations.
-
-        Examples:
-            >>> FunctionBase1D("a*x + b")
         """
         self.expr_str = expr_str
         self.expr_unc: str = ""
@@ -44,16 +45,17 @@ class FunctionBase1D:
         self._complex = False
         self._show_complex = False
 
-        # self.expr: Union[sym.core.add.Add, sym.core.expr.Expr]
-        # self.coefs: List[sym.core.symbol.Symbol]
-        # self.sols = List[sym.core.mul.Mul]
-        # self.lambda_fun: Callable
+        return None
 
     @staticmethod
-    def ordered_symbols(expr_str: str):
-        """
-        Возвращает список sympy.Symbol
-        в порядке появления в строке выражения.
+    def ordered_symbols(expr_str: str) -> list[sym.Symbol]:
+        """Return sympy symbols in the order they appear in the expression string.
+
+        Args:
+            expr_str: Expression string to scan.
+
+        Returns:
+            A list of symbols ordered by their first appearance in the expression.
         """
         expr = sym.sympify(expr_str)
 
@@ -81,35 +83,26 @@ class FunctionBase1D:
         return ordered
 
     @cached_property
-    def coefs(self) -> List[sym.core.symbol.Symbol]:
-        """Return coefficient symbols sorted for consistency.
+    def coefs(self) -> list[Coefficient]:
+        """Return coefficient placeholders or bound values.
+
+        Before coefficients are bound, this list contains sympy symbols in a stable
+        order. After calling `add_coefs`, it contains the supplied coefficient values.
 
         Returns:
-            list[sym.core.symbol.Symbol]: Sorted coefficients excluding the variable ``x``.
-
-        Raises:
-            None.
-
-        Side Effects:
-            Caches the result after first access.
+            A list of coefficient symbols or values.
         """
         return self.args
 
     @cached_property
-    def sols(self) -> List[sym.core.mul.Mul]:
+    def sols(self) -> list[Solution]:
         """Solve the expression set equal to zero.
 
         Returns analytical solutions, optionally excluding complex values unless
-        complex display is enabled. Returns an empty list when solving fails.
+        complex display is enabled.
 
         Returns:
-            list[sym.core.mul.Mul]: Solutions for the equation ``expr_sym = 0``.
-
-        Raises:
-            None.
-
-        Side Effects:
-            Caches solutions for reuse.
+            A list of solutions for the equation ``expr_sym = 0``.
         """
         # try:
         #     solution = sym.solvers.solve(self.expr_sym - 0, sym.Symbol("x"))
@@ -137,30 +130,19 @@ class FunctionBase1D:
             return solution
 
     def find_sols(
-        self, y: Union[int, float, sym.core.expr.Expr] = 0
-    ) -> Union[List[sym.core.mul.Mul], sym.core.mul.Mul]:
-        """Find solutions when the expression equals a target value.
-
-        Creates a shifted expression by subtracting ``y`` and returns either a list
-        of solutions or a single solution depending on availability, reusing
-        coefficients if they were previously assigned.
+        self, y: int | float | sym.Expr | str | Uncertain = 0
+    ) -> list[Solution] | Solution:
+        """Solve the expression for a specified target value.
 
         Args:
-            y (int | float | sym.core.expr.Expr): Target value to solve against.
+            y: Target value for ``expr_sym = y``. Strings are parsed as sympy expressions.
 
         Returns:
-            list[sym.core.mul.Mul] | sym.core.mul.Mul: Solutions of ``expr_sym - y = 0``.
-
-        Raises:
-            IndexError: If no solutions exist when attempting to access the first.
-
-        Side Effects:
-            None.
+            A list of solutions or a single solution when only one exists.
         """
-
-        if isinstance(y, unc.core.Variable) or isinstance(y, unc.core.AffineScalarFunc):
+        if isinstance(y, (unc.core.Variable, unc.core.AffineScalarFunc)):
             new_expr = FunctionBase1D(self.expr_str + " - NEW_1")
-            
+
             if isinstance(self.coefs, np.ndarray):
                 self.coefs = self.coefs.tolist()
             # print(type(self.coefs))
@@ -187,17 +169,11 @@ class FunctionBase1D:
             return new_expr.sols[0]
 
     @cached_property
-    def lambda_fun(self) -> Callable:
+    def lambda_fun(self) -> Callable[..., LambdaReturn]:
         """Generate a numpy-evaluable callable for the expression.
 
         Returns:
-            Callable: Function accepting ``x`` followed by coefficients.
-
-        Raises:
-            None.
-
-        Side Effects:
-            Caches the generated callable.
+            A callable accepting ``x`` followed by coefficient values.
         """
         lambda_args = [sym.Symbol("x")] + self.args
         return sym.lambdify(lambda_args, self.expr_sym, "numpy")
@@ -205,14 +181,11 @@ class FunctionBase1D:
     def show_complex(self, show: bool = False) -> "FunctionBase1D":
         """Toggle the display of complex solutions.
 
+        Args:
+            show: Whether to include complex-valued solutions.
+
         Returns:
-            FunctionBase1D: The current instance with updated display preference.
-
-        Raises:
-            None.
-
-        Side Effects:
-            Flips the `_show_complex` flag controlling solution filtering.
+            The current instance with updated display preference.
         """
         self._show_complex = show
 
@@ -220,30 +193,22 @@ class FunctionBase1D:
 
     @staticmethod
     def _calculate_uncertainty_analyticaly(
-        expr: Union[sym.core.add.Add, sym.core.expr.Expr], parms: List[sym.Symbol] = []
-    ) -> sym.core.expr.Expr:
-        """Compute propagated uncertainty analytically for an expression.
-
-        Uses partial derivatives with respect to each parameter to accumulate squared
-        contributions of parameter uncertainties and returns the square root of their sum.
+        expr: sym.Expr,
+        parms: Sequence[sym.Symbol] | None = None,
+    ) -> sym.Expr:
+        """Compute propagated uncertainty for a symbolic expression.
 
         Args:
-            expr (sym.core.add.Add | sym.core.expr.Expr): Expression whose uncertainty is estimated.
-            parms (list[sym.Symbol]): Parameters considered uncertain; defaults to free symbols.
+            expr: Expression whose uncertainty is estimated.
+            parms: Parameters treated as uncertain; defaults to free symbols.
 
         Returns:
-            sym.core.expr.Expr: Symbolic expression representing combined uncertainty.
-
-        Raises:
-            None.
-
-        Side Effects:
-            None.
+            A symbolic expression representing the combined uncertainty.
         """
-        if not parms:
+        if parms is None:
             parms = expr.free_symbols
 
-        unc_list = []
+        unc_list: list[sym.Expr] = []
         for parm in parms:
             unc_list.append(
                 (sym.diff(expr, parm) * sym.Symbol(f"Delta_{str(parm)}")) ** 2
@@ -251,35 +216,28 @@ class FunctionBase1D:
 
         return sym.sqrt(np.sum(unc_list))
 
-    def add_coefs(self, coefs: list[Any]) -> "FunctionBase1D":
+    def add_coefs(self, coefs: CoefficientsInput) -> "FunctionBase1D":
         """Apply coefficients to the expression and rebuild cached artifacts.
 
-        Substitutes provided coefficients (with or without uncertainties) into the
-        symbolic expression, recomputes solutions, and wraps a lambda function that
-        binds the coefficients for evaluation.
-
         Args:
-            coefs (list[Any]): Coefficient values matching the detected symbols.
+            coefs: Coefficient values matching the detected symbols.
 
         Returns:
-            FunctionBase1D: The current instance with coefficients applied.
+            The current instance with coefficients applied.
 
         Raises:
-            TypeError: If the number of coefficients differs from expectations.
-
-        Side Effects:
-            Mutates internal caches and may flag the expression as complex.
+            ExpressionError: If the number of coefficients differs from expectations.
         """
-
         if len(coefs) != len(self.coefs):
-            raise TypeError("Number of args is not the same as numer of coefs")
+            raise ExpressionError(
+                "Number of arguments does not match the number of coefficients."
+            )
 
         self.coefs = coefs
 
         if any(
             [
-                isinstance(x, unc.core.Variable)
-                or isinstance(x, unc.core.AffineScalarFunc)
+                isinstance(x, (unc.core.Variable, unc.core.AffineScalarFunc))
                 for x in coefs
             ]
         ):
@@ -290,13 +248,13 @@ class FunctionBase1D:
             coefs_dict[self.args[i]] = coefs[i]
 
         if self._unc_coefs:
-            # separating nominal_values and standart deviations
+            # Separating nominal values and standard deviations.
             nominal_coefs_dict = {}
             std_coefs_dict = {}
             for key in coefs_dict:
                 delta = sym.Symbol(f"Delta_{str(key)}")
-                if isinstance(coefs_dict[key], unc.core.Variable) or isinstance(
-                    coefs_dict[key], unc.core.AffineScalarFunc
+                if isinstance(
+                    coefs_dict[key], (unc.core.Variable, unc.core.AffineScalarFunc)
                 ):
                     nominal_coefs_dict[key] = coefs_dict[key].nominal_value
                     std_coefs_dict[delta] = coefs_dict[key].std_dev
@@ -330,8 +288,10 @@ class FunctionBase1D:
             self.sols = sols_list
 
             # making lambda function
-            def wrap_lambdify(func: Callable, *coefs: Any) -> Callable:
-                def new_lambda(x: Any) -> Any:
+            def wrap_lambdify(
+                func: Callable[..., LambdaReturn], *coefs: Coefficient
+            ) -> Callable[[InputValue], LambdaReturn]:
+                def new_lambda(x: InputValue) -> LambdaReturn:
                     return func(x, *coefs)
 
                 return new_lambda
@@ -368,17 +328,8 @@ class FunctionBase1D:
     def to_latex_expr(self) -> str:
         """Convert the expression (with coefficients) to a LaTeX string.
 
-        Replaces symbolic coefficients with their numeric or uncertainty-aware
-        representations and normalizes scientific notation to LaTeX-friendly form.
-
         Returns:
-            str: LaTeX-formatted expression string.
-
-        Raises:
-            None.
-
-        Side Effects:
-            None.
+            LaTeX-formatted expression string.
         """
         latex = sym.latex(self.expr_sym)
 
@@ -399,24 +350,14 @@ class FunctionBase1D:
         )
         return rf"{latex}"
 
-    def _calculate_sols(self, show_unc: Optional[bool] = None) -> list:
-        """Prepare solution strings with optional uncertainty notation.
-
-        Recomputes solutions when necessary, formats them for display, and toggles
-        inclusion of uncertainty terms depending on the provided flag or internal
-        coefficient state.
+    def _calculate_sols(self, show_unc: bool | None = None) -> list[str]:
+        """Prepare LaTeX solution strings with optional uncertainty notation.
 
         Args:
-            show_unc (bool | None): Whether to include propagated uncertainties.
+            show_unc: Whether to include propagated uncertainties.
 
         Returns:
-            list: Solutions represented as strings or LaTeX fragments.
-
-        Raises:
-            None.
-
-        Side Effects:
-            May clear cached solutions to force recalculation.
+            A list of LaTeX-formatted solution strings.
         """
         latex_sols = []
 
@@ -452,24 +393,17 @@ class FunctionBase1D:
 
         return latex_sols
 
-    def to_latex_sols(self, y: Any = None, show_unc: bool = False) -> str:
-        """Format solutions as a LaTeX array with optional target offset.
-
-        Generates indexed solution strings, optionally subtracting a provided target
-        value before solving, and converts scientific notation for readability.
+    def to_latex_sols(
+        self, y: Coefficient | str | None = None, show_unc: bool = False
+    ) -> str:
+        """Format solutions as a LaTeX array with an optional target offset.
 
         Args:
-            show_unc (bool): Whether to include uncertainties in the output.
-            y (Any): Optional target value to subtract prior to solving.
+            y: Optional target value to subtract prior to solving.
+            show_unc: Whether to include uncertainties in the output.
 
         Returns:
-            str: LaTeX-formatted solution array.
-
-        Raises:
-            None.
-
-        Side Effects:
-            May trigger recalculation of cached solutions.
+            LaTeX-formatted solution array.
         """
         show_unc = show_unc if not self._unc_coefs else self._unc_coefs
 
@@ -505,20 +439,11 @@ class FunctionBase1D:
     def deriv(self, level: int = 1) -> "FunctionBase1D":
         """Compute a derivative of the expression.
 
-        Differentiates the expression with respect to ``x`` the specified number of
-        times and propagates existing coefficients to the new function if present.
-
         Args:
-            level (int): Order of the derivative to compute.
+            level: Order of the derivative to compute.
 
         Returns:
-            FunctionBase1D: New instance representing the derivative.
-
-        Raises:
-            None.
-
-        Side Effects:
-            None.
+            New instance representing the derivative.
         """
         expr = self.expr_sym
 
@@ -535,20 +460,13 @@ class FunctionBase1D:
 
 
 class Poly(FunctionBase1D):
-    def __init__(self, degree: int = str) -> None:
+    """Construct a polynomial expression of the specified degree."""
+
+    def __init__(self, degree: int = 1) -> None:
         """Create a polynomial expression of the specified degree.
 
         Args:
-            degree (int | type[str]): Polynomial degree; defaults to a placeholder `str`.
-
-        Returns:
-            None
-
-        Raises:
-            None.
-
-        Side Effects:
-            Initializes the base class with a generated polynomial expression string.
+            degree: Polynomial degree.
         """
         self.degree = degree
 
@@ -559,44 +477,35 @@ class Poly(FunctionBase1D):
 
         super().__init__(expr_str)
         # self.expr_str = expr_str
+        return None
 
     @cached_property
-    def sols(self) -> List[sym.core.mul.Mul]:
+    def sols(self) -> list[Solution]:
         """Return analytical solutions for the polynomial when solvable.
 
         Returns:
-            list[sym.core.mul.Mul]: Solutions for the polynomial equation.
+            A list of solutions for the polynomial equation.
 
         Raises:
-            TypeError: If the polynomial degree exceeds four and cannot be solved analytically.
-
-        Side Effects:
-            None.
+            ExpressionError: If the polynomial degree exceeds four.
         """
         if self.degree > 4:
-            raise TypeError(
-                "Cant find analytical solution for Poly with degree greater than 4"
+            raise ExpressionError(
+                "Cannot find analytical solutions for polynomials with degree > 4."
             )
         else:
             return super().sols
 
 
 class Hyper(FunctionBase1D):
+    """Construct a hyperbolic expression variant."""
+
     def __init__(self, style: int = 0) -> None:
         """Initialize a hyperbolic expression variant.
 
         Args:
-            style (int): Selector for expression form; ``0`` uses ``p_0*x / (x + p_1)``,
-                otherwise uses ``p_0 / (x + p_1) + p_2``.
-
-        Returns:
-            None
-
-        Raises:
-            None.
-
-        Side Effects:
-            Sets up the base class with the chosen expression.
+            style: Expression selector; ``0`` uses ``p_0*x / (x + p_1)``, otherwise
+                uses ``p_0 / (x + p_1) + p_2``.
         """
         if style == 0:
             expr_str = "p_0*x / (x + p_1)"
@@ -604,3 +513,4 @@ class Hyper(FunctionBase1D):
             expr_str = "p_0 / (x + p_1) + p_2"
 
         super().__init__(expr_str)
+        return None
