@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "unc_tools"
 version = "0.1.0"
 readme = "README.md"
-requires-python = ">=3.6"
+requires-python = ">=3.11"
 authors = [{ name = "Savateykin Yaroslav", email = "yaroslavsavateykin@yandex.ru" }]
 license = { file = "LICENSE" }
 classifiers = ["License :: OSI Approved :: MIT License"]
@@ -22,7 +22,6 @@ dependencies = [
   "packaging==25.0",
   "pandas==2.3.2",
   "pillow==11.3.0",
-  "plotly==6.3.0",
   "pyparsing==3.2.4",
   "python-dateutil==2.9.0.post0",
   "pytz==2025.2",

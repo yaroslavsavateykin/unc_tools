@@ -37,10 +37,7 @@ class FunctionBase1D:
         self.expr_str = expr_str
         self.expr_unc: str = ""
         self.expr_sym = sym.parse_expr(expr_str)
-        self.args = sorted(
-            [x for x in list(self.expr_sym.free_symbols) if not str(x) == "x"],
-            key=lambda s: str(s),
-        )
+        self.args = self.ordered_symbols(expr_str)
 
         self._added_coefs = False
         self._unc_coefs = False
@@ -51,6 +48,37 @@ class FunctionBase1D:
         # self.coefs: List[sym.core.symbol.Symbol]
         # self.sols = List[sym.core.mul.Mul]
         # self.lambda_fun: Callable
+
+    @staticmethod
+    def ordered_symbols(expr_str: str):
+        """
+        Возвращает список sympy.Symbol
+        в порядке появления в строке выражения.
+        """
+        expr = sym.sympify(expr_str)
+
+        symbols = expr.free_symbols
+
+        name_to_symbol = {str(s): s for s in symbols}
+
+        ordered = []
+        used = set("x")
+
+        i = 0
+        n = len(expr_str)
+
+        while i < n:
+            for name, symb in name_to_symbol.items():
+                if expr_str.startswith(name, i):
+                    if name not in used:
+                        ordered.append(symb)
+                        used.add(name)
+                    i += len(name)
+                    break
+            else:
+                i += 1
+
+        return ordered
 
     @cached_property
     def coefs(self) -> List[sym.core.symbol.Symbol]:
@@ -131,9 +159,15 @@ class FunctionBase1D:
         """
 
         if isinstance(y, unc.core.Variable) or isinstance(y, unc.core.AffineScalarFunc):
-            new_expr = FunctionBase1D(self.expr_str + " - p_100")
-
-            list_coefs = list(self.coefs) + [y]
+            new_expr = FunctionBase1D(self.expr_str + " - NEW_1")
+            
+            if isinstance(self.coefs, np.ndarray):
+                self.coefs = self.coefs.tolist()
+            # print(type(self.coefs))
+            print(y)
+            list_coefs = self.coefs + [y]
+            # print(new_expr.coefs)
+            # print(list_coefs)
             if self._added_coefs:
                 new_expr.add_coefs(list_coefs)
 
@@ -273,7 +307,9 @@ class FunctionBase1D:
             # making solutions
             sols_list = []
             for sol in self.sols:
+                # print(sol)
                 nominal = sol.subs(nominal_coefs_dict)
+                # print(nominal)
                 if nominal.is_complex and not nominal.is_real:
                     self._complex = True
 
@@ -308,9 +344,7 @@ class FunctionBase1D:
             # making str expr
             self.expr_unc = self.expr_str
             for key in coefs_dict:
-                if isinstance(coefs_dict[key], unc.core.Variable) or isinstance(
-                    coefs_dict[key], unc.core.AffineScalarFunc
-                ):
+                if isinstance(coefs_dict[key], unc.core.Variable):
                     replacement = f"unc.ufloat({coefs_dict[key].nominal_value},{coefs_dict[key].std_dev})"
                 else:
                     replacement = str(coefs_dict[key])

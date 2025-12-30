@@ -518,7 +518,7 @@ class UncRegression:
         xtol_root: float = 1e-20,
         xtol_diff: float = 1e-20,
         maxiter: int = 500,
-        solve_numerically: bool = False,
+        # solve_numerically: bool = False,
         **kwargs: Any,
     ) -> Any:
         """Найти значение x для заданного y с учетом неопределенности.
@@ -557,7 +557,7 @@ class UncRegression:
                         xtol_diff=xtol_diff,
                         xtol_root=xtol_root,
                         maxiter=maxiter,
-                        solve_numerically=solve_numerically,
+                        # solve_numerically=solve_numerically,
                         **kwargs,
                     )
                     for y0 in y
@@ -566,21 +566,23 @@ class UncRegression:
 
         args_nominal = self.coefs_nom
 
-        if isinstance(y, unc.core.Variable):
+        if isinstance(y, unc.core.Variable) or isinstance(y, unc.core.AffineScalarFunc):
             yval = y.nominal_value
             ytol = y.std_dev
         else:
             yval = y
             ytol = 0
 
-        if isinstance(x0, unc.core.Variable):
+        if isinstance(x0, unc.core.Variable) or isinstance(
+            x0, unc.core.AffineScalarFunc
+        ):
             xtol = x0.std_dev
             x0 = x0.nominal_value
         else:
             xtol = 0
             x0 = x0
 
-        if self.expression and not solve_numerically:
+        if self.expression and x0 is None:
             sols = self.expression.find_sols(y=y)
 
             if hasattr(sols, "__iter__"):
@@ -632,6 +634,7 @@ class UncRegression:
 
             dxtol = np.sqrt(ytol**2 + np.sum((dcoefs * coefs_std) ** 2)) / dy
 
+            # print(xtol_root, xtol_diff, dxtol, xtol)
             xtol_summ = np.sqrt(xtol_root**2 + xtol_diff**2 + dxtol**2 + xtol**2)
 
             return unc.ufloat(result_root.root, xtol_summ)
