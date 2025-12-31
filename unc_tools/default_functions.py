@@ -146,7 +146,7 @@ class FunctionBase1D:
             if isinstance(self.coefs, np.ndarray):
                 self.coefs = self.coefs.tolist()
             # print(type(self.coefs))
-            print(y)
+            # print(y)
             list_coefs = self.coefs + [y]
             # print(new_expr.coefs)
             # print(list_coefs)
