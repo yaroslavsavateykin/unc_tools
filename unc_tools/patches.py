@@ -11,10 +11,14 @@ import uncertainties as unc
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.container import ErrorbarContainer
+from matplotlib.collections import PolyCollection
 import sympy as sym
 from uncertainties.unumpy import nominal_values, std_devs
 
 from .default_functions import FunctionBase1D
+
+import plotly.graph_objects as go
+import plotly.colors as pc
 
 __all__ = [
     "get_unc_attr",
@@ -23,6 +27,8 @@ __all__ = [
     "new_scatter",
     "new_subs",
     "set_unc_attr",
+    # "plot_with_uncertainty",
+    # "new_add_scatter",
 ]
 
 Uncertain = unc.core.AffineScalarFunc | unc.core.Variable
@@ -259,7 +265,7 @@ def new_plot(
             y_nom,
             xerr=x_err,
             yerr=y_err,
-            **errorbar_kwargs,
+            # **errorbar_kwargs,
         )
     else:
         return _original_plot(self, x_nom, y_nom, *args, **plot_kwargs)
@@ -379,7 +385,9 @@ sym.core.cache.use_cache = False
 _unc_attrs = {}
 
 
-def get_unc_attr(obj: object, attr: str, default: object | None = None) -> object | None:
+def get_unc_attr(
+    obj: object, attr: str, default: object | None = None
+) -> object | None:
     """Retrieve a stored uncertainty attribute for a sympy object.
 
     Args:
@@ -485,3 +493,317 @@ def new_subs(
 # sym.Basic.subs = new_subs
 
 sym.core.cache.use_cache = True
+
+
+_old_add_scatter = go.Figure.add_scatter
+
+
+def _to_rgba(color, alpha: float):
+    """
+    Делает 'rgba(r,g,b,alpha)' из:
+    - '#RRGGBB' / '#RGB'
+    - 'rgb(r,g,b)'
+    - 'rgba(r,g,b,a)'
+    Если не получилось — возвращает None.
+    """
+    if color is None:
+        return None
+    c = str(color).strip()
+
+    try:
+        if c.startswith("rgba(") and c.endswith(")"):
+            parts = [p.strip() for p in c[5:-1].split(",")]
+            r, g, b = int(float(parts[0])), int(float(parts[1])), int(float(parts[2]))
+            return f"rgba({r},{g},{b},{alpha})"
+
+        if c.startswith("rgb(") and c.endswith(")"):
+            parts = [p.strip() for p in c[4:-1].split(",")]
+            r, g, b = int(float(parts[0])), int(float(parts[1])), int(float(parts[2]))
+            return f"rgba({r},{g},{b},{alpha})"
+
+        if c.startswith("#"):
+            rgb = pc.hex_to_rgb(c)  # поддерживает и #RGB, и #RRGGBB
+            r, g, b = rgb
+            return f"rgba({r},{g},{b},{alpha})"
+    except Exception:
+        pass
+
+    return None
+
+
+def new_add_scatter(
+    self,
+    x=None,
+    y=None,
+    name=None,
+    marker=None,
+    line=None,
+    show_scatter=False,
+    show_errors=False,
+    show_band=False,
+    band_sigma=1.96,
+    band_alpha=0.20,
+    *args,
+    **kwargs,
+):
+    if x is None:
+        x = []
+    if y is None:
+        y = []
+    x = np.asarray(x)
+    y = np.asarray(y)
+    if x.ndim == 0:
+        x = x.reshape(1)
+    if y.ndim == 0:
+        y = y.reshape(1)
+
+    try:
+        x_nom = np.asarray(nominal_values(x), dtype=float)
+        x_std = np.asarray(std_devs(x), dtype=float)
+        if np.all(x_std == 0):
+            x_std = None
+    except Exception:
+        x_nom = np.asarray(x, dtype=float)
+        x_std = None
+
+    try:
+        y_nom = np.asarray(nominal_values(y), dtype=float)
+        y_std = np.asarray(std_devs(y), dtype=float)
+        if np.all(y_std == 0):
+            y_std = None
+    except Exception:
+        y_nom = np.asarray(y, dtype=float)
+        y_std = None
+
+    if len(x_nom) != len(y_nom):
+        raise ValueError(f"x and y length mismatch: {len(x_nom)} vs {len(y_nom)}")
+
+    series_i = getattr(self, "_unc_series_i", 0)
+
+    base_color = None
+    if isinstance(line, dict) and line.get("color") is not None:
+        base_color = line["color"]
+    elif isinstance(marker, dict) and marker.get("color") is not None:
+        base_color = marker["color"]
+
+    if base_color is None:
+        try:
+            cw = self.layout.template.layout.colorway
+        except Exception:
+            cw = None
+        if not cw:
+            cw = [
+                "#636EFA",
+                "#EF553B",
+                "#00CC96",
+                "#AB63FA",
+                "#FFA15A",
+                "#19D3F3",
+                "#FF6692",
+                "#B6E880",
+                "#FF97FF",
+                "#FECB52",
+            ]
+        base_color = cw[series_i % len(cw)]
+
+    fillcolor = _to_rgba(base_color, band_alpha) or f"rgba(0,0,0,{band_alpha})"
+
+    group = name if name is not None else f"series_{series_i}"
+    if show_band and (y_std is not None):
+        upper = y_nom + band_sigma * y_std
+        lower = y_nom - band_sigma * y_std
+        group = name if name is not None else f"series_{series_i}"
+
+        self.add_trace(
+            go.Scatter(
+                x=x_nom,
+                y=upper,
+                mode="lines",
+                line=dict(width=0, color=base_color),
+                showlegend=False,
+                hoverinfo="skip",
+                legendgroup=group,
+                legendgrouptitle_text=name,
+            )
+        )
+        self.add_trace(
+            go.Scatter(
+                x=x_nom,
+                y=lower,
+                mode="lines",
+                fill="tonexty",
+                fillcolor=fillcolor,
+                line=dict(width=0, color=base_color),
+                showlegend=False,
+                hoverinfo="skip",
+                legendgroup=group,
+                legendgrouptitle_text=name,
+            )
+        )
+
+    mode = kwargs.pop("mode", ("markers" if show_scatter else "lines"))
+
+    if line is None:
+        line = {}
+    if isinstance(line, dict) and line.get("color") is None:
+        line = dict(line)
+        line["color"] = base_color
+
+    if marker is None:
+        marker = {}
+    if isinstance(marker, dict) and marker.get("color") is None:
+        marker = dict(marker)
+        marker["color"] = base_color
+
+    _old_add_scatter(
+        self,
+        x=x_nom,
+        y=y_nom,
+        mode=mode,
+        name=name,
+        marker=marker,
+        line=line,
+        legendgroup=group,
+        *args,
+        **kwargs,
+    )
+
+    tr = self.data[-1]
+
+    if show_errors:
+        if y_std is not None:
+            tr.error_y = dict(type="data", array=y_std, visible=True, color=base_color)
+        if x_std is not None:
+            tr.error_x = dict(type="data", array=x_std, visible=True, color=base_color)
+
+    self._unc_series_i = series_i + 1
+
+    return self
+
+
+go.Figure.add_scatter = new_add_scatter
+
+
+def plot_with_uncertainty(
+    ax: Axes,
+    x,
+    y,
+    *,
+    sigma=None,
+    k: float = 1.96,
+    mode: str = "line",
+    show_band: bool = True,
+    show_errors: bool = True,
+    color=None,
+    alpha: float = 0.20,
+    label: str | None = None,
+    zorder=None,
+    scatter_kwargs=None,
+    line_kwargs=None,
+    error_kwargs=None,
+    band_kwargs=None,
+):
+    """
+    Рисует line/scatter + errorbars + confidence band с единым цветом.
+    """
+
+    scatter_kwargs = scatter_kwargs or {}
+    line_kwargs = line_kwargs or {}
+    error_kwargs = error_kwargs or {}
+    band_kwargs = band_kwargs or {}
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # --- nominal / sigma ---
+    if nominal_values is not None:
+        try:
+            x_nom = np.asarray(nominal_values(x), dtype=float)
+        except Exception:
+            x_nom = np.asarray(x, dtype=float)
+    else:
+        x_nom = np.asarray(x, dtype=float)
+
+    if nominal_values is not None and std_devs is not None:
+        try:
+            y_nom = np.asarray(nominal_values(y), dtype=float)
+            y_std_auto = np.asarray(std_devs(y), dtype=float)
+            if np.all(y_std_auto == 0):
+                y_std_auto = None
+        except Exception:
+            y_nom = np.asarray(y, dtype=float)
+            y_std_auto = None
+    else:
+        y_nom = np.asarray(y, dtype=float)
+        y_std_auto = None
+
+    if sigma is None:
+        sigma = y_std_auto
+
+    # ---------- ОСНОВНОЙ PLOT (задаёт цвет) ----------
+    artist = None
+
+    if mode in ("line", "line+scatter"):
+        (artist,) = ax.plot(
+            x_nom,
+            y_nom,
+            label=label,
+            color=color,
+            zorder=zorder,
+            **line_kwargs,
+        )
+
+    if mode in ("scatter", "line+scatter"):
+        artist = ax.scatter(
+            x_nom,
+            y_nom,
+            label=label if mode == "scatter" else None,
+            color=color,
+            zorder=zorder,
+            **scatter_kwargs,
+        )
+
+    if artist is None:
+        raise ValueError("mode должен быть 'line', 'scatter' или 'line+scatter'")
+
+    # --- финальный цвет (из artist!) ---
+    if hasattr(artist, "get_color"):
+        base_color = artist.get_color()
+    else:
+        base_color = artist.get_facecolor()[0]
+
+    # ---------- ERROR BARS ----------
+    if show_errors and sigma is not None:
+        ax.errorbar(
+            x_nom,
+            y_nom,
+            yerr=k * np.asarray(sigma),
+            fmt="none",
+            ecolor=base_color,
+            capsize=3,
+            zorder=zorder,
+            **error_kwargs,
+        )
+
+    # ---------- CONFIDENCE BAND ----------
+    band = None
+    if show_band and sigma is not None:
+        sig = np.asarray(sigma, dtype=float)
+        lower = y_nom - k * sig
+        upper = y_nom + k * sig
+
+        band = ax.fill_between(
+            x_nom,
+            lower,
+            upper,
+            color=base_color,
+            alpha=alpha,
+            label=None,  # <<< важно: не засоряем легенду
+            zorder=zorder,
+            **band_kwargs,
+        )
+
+    return {
+        "artist": artist,
+        "band": band,
+    }
