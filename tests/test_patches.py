@@ -4,12 +4,11 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 from matplotlib.container import ErrorbarContainer
-import plotly.graph_objects as go
 import pytest
 import sympy as sym
 import uncertainties as unc
 
-from unc_tools.patches import new_add_scatter, new_lambdify
+from unc_tools.patches import new_lambdify
 
 
 def test_matplotlib_plot_keeps_standard_single_argument_form():
@@ -45,7 +44,3 @@ def test_uncertainty_lambdify_supports_scalar_and_multiple_arguments():
 
     assert result.nominal_value == 6.0
     assert result.std_dev == pytest.approx(0.5)
-
-
-def test_import_does_not_patch_plotly_globally():
-    assert go.Figure.add_scatter is not new_add_scatter

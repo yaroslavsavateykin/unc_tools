@@ -53,6 +53,20 @@ reg = UncRegression(
 pred = reg.predict([0.5, 1.5])
 ```
 
+### Fonts
+
+Plots use system fonts and never require an external LaTeX installation. Enable a
+serif fallback chain globally with `serif()`, or for a regression plot with
+`reg.plot(serif=True)`. The chain prefers CMU Serif, then Computer Modern Roman,
+then DejaVu Serif. Use `reg.plot(serif=False)` to restore the original Matplotlib
+font settings before drawing.
+
+```python
+from unc_tools import serif
+
+serif()
+```
+
 ---
 
 ## Optional matplotlib patches

@@ -12,7 +12,7 @@ from .exceptions import (
     ModelTypeError,
     RootFindingError,
 )
-from .unc_regression import UncRegression
+from .unc_regression import UncRegression, serif
 
 
 try:
@@ -30,6 +30,7 @@ __all__ = [
     "ModelTypeError",
     "Poly",
     "RootFindingError",
+    "serif",
     "UncRegression",
     "__version__",
 ]

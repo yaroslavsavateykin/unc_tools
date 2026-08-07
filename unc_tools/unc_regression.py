@@ -21,7 +21,7 @@ from matplotlib.axes import Axes
 from .default_functions import FunctionBase1D, Poly
 from .exceptions import DataError, FitError, InitialGuessError, ModelTypeError, RootFindingError
 
-__all__ = ["UncRegression"]
+__all__ = ["UncRegression", "serif"]
 
 Uncertain = unc.core.AffineScalarFunc | unc.core.Variable
 Numeric = float | int | np.number
@@ -30,41 +30,31 @@ IndexSlice = slice | Sequence[int] | np.ndarray
 Solution = sym.Expr | Uncertain | tuple[Uncertain, Uncertain]
 PredictInput = Numeric | Uncertain | Sequence[Numeric | Uncertain] | np.ndarray
 
+_FONT_PARAMS = ("font.family", "font.serif")
+_DEFAULT_FONT_PARAMS = {name: plt.rcParams[name] for name in _FONT_PARAMS}
+
+
+def _set_serif(enable: bool) -> None:
+    """Apply or restore the serif font fallback chain."""
+    plt.rcParams["text.usetex"] = False
+    if enable:
+        plt.rcParams.update(
+            {
+                "font.family": "serif",
+                "font.serif": ["CMU Serif", "Computer Modern Roman", "DejaVu Serif"],
+            }
+        )
+    else:
+        plt.rcParams.update(_DEFAULT_FONT_PARAMS)
+
+
+def serif() -> None:
+    """Enable the serif font fallback chain for subsequent Matplotlib plots."""
+    _set_serif(True)
+
 
 class UncRegression:
     """Perform regression analysis with uncertainty-aware data and parameters."""
-
-    @staticmethod
-    def latex_style(tex: bool) -> None:
-        """Configure matplotlib to use LaTeX text rendering.
-
-        Args:
-            tex: Whether to enable LaTeX text rendering.
-        """
-        if tex:
-            plt.rcParams.update(
-                {
-                    "text.usetex": True,
-                    "font.family": "serif",
-                    "font.serif": ["Computer Modern"],
-                    "text.latex.preamble": r"""
-                    \usepackage[utf8]{inputenc}
-                    \usepackage[russian]{babel}
-                    \usepackage[T2A]{fontenc}
-                """,
-                    "pgf.texsystem": "xelatex",
-                }
-            )
-        else:
-            plt.rcParams.update(
-                {
-                    "text.usetex": False,
-                    "font.family": "sans-serif",
-                    "font.sans-serif": ["DejaVu Sans", "Arial", "Helvetica"],
-                    "pgf.texsystem": None,  # Can be removed to restore defaults.
-                }
-            )
-        return None
 
     def __init__(
         self,
@@ -253,6 +243,7 @@ class UncRegression:
         show_expr: bool = True,
         show_coefficients: bool = False,
         show_r2: bool = True,
+        serif: bool | None = None,
         **kwargs: object,
     ) -> Axes:
         """Plot the regression results.
@@ -273,11 +264,16 @@ class UncRegression:
             show_expr: Whether to include the analytic expression in the legend.
             show_coefficients: Whether to include coefficients in the legend.
             show_r2: Whether to include the R-squared value in the legend.
+            serif: Enable or disable CMU Serif for the plot. ``None`` preserves the
+                current Matplotlib font settings.
             **kwargs: Additional keyword arguments forwarded to matplotlib.
 
         Returns:
             The axes containing the plot.
         """
+        if serif is not None:
+            _set_serif(serif)
+
         if labels is None:
             labels = ["", ""]
 
