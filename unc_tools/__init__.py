@@ -4,7 +4,14 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 
 from .default_functions import FunctionBase1D, Hyper, Poly
-from .exceptions import DataError, ExpressionError, InitialGuessError, ModelTypeError
+from .exceptions import (
+    DataError,
+    ExpressionError,
+    FitError,
+    InitialGuessError,
+    ModelTypeError,
+    RootFindingError,
+)
 from .unc_regression import UncRegression
 
 
@@ -16,11 +23,13 @@ except PackageNotFoundError:
 __all__ = [
     "DataError",
     "ExpressionError",
+    "FitError",
     "FunctionBase1D",
     "Hyper",
     "InitialGuessError",
     "ModelTypeError",
     "Poly",
+    "RootFindingError",
     "UncRegression",
     "__version__",
 ]

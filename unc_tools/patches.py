@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Callable, Sequence
 
 import matplotlib
@@ -161,8 +160,6 @@ _original_plot = matplotlib.axes.Axes.plot
 
 def new_plot(
     self: Axes,
-    x: ArrayLike,
-    y: ArrayLike,
     *args: object,
     **kwargs: object,
 ) -> Artist | ErrorbarContainer:
@@ -195,6 +192,13 @@ def new_plot(
         >>> ax = plt.subplot()
         >>> _ = ax.plot([0, 1], [0, 1])
     """
+    # Preserve Matplotlib's complete calling convention except for a single x/y
+    # series, where uncertainty values can be rendered as error bars.
+    if len(args) < 2 or len(args) > 3 or isinstance(args[1], str):
+        return _original_plot(self, *args, **kwargs)
+
+    x, y = args[:2]
+    fmt = args[2] if len(args) == 3 else ""
     x = [x] if not hasattr(x, "__iter__") else x
     y = [y] if not hasattr(y, "__iter__") else y
     x = np.asarray(x)
@@ -218,17 +222,6 @@ def new_plot(
     min_visual_std = 2e-10
 
     plot_kwargs = kwargs.copy()
-    if "color" not in plot_kwargs:
-        try:
-            prop_cycle = matplotlib.rcParams["axes.prop_cycle"]
-            colors = prop_cycle.by_key().get(
-                "color", ["C1", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]
-            )
-            color_index = len(self.lines) % len(colors)
-            plot_kwargs["color"] = colors[color_index]
-        except (AttributeError, KeyError):
-            color_index = len(self.lines) % 11
-            plot_kwargs["color"] = f"C{color_index}"
 
     if x_std is not None or y_std is not None:
         y_err = None
@@ -245,7 +238,7 @@ def new_plot(
                 x_err = None
 
         if x_err is None and y_err is None:
-            return _original_plot(self, x_nom, y_nom, *args, **plot_kwargs)
+            return _original_plot(self, x_nom, y_nom, fmt, **plot_kwargs)
 
         errorbar_kwargs = {
             "capsize": 4,
@@ -256,19 +249,16 @@ def new_plot(
         }
         errorbar_kwargs.update(plot_kwargs)
 
-        for arg in ["marker", "linestyle", "linewidth"]:
-            if arg in errorbar_kwargs:
-                del errorbar_kwargs[arg]
-
         return self.errorbar(
             x_nom,
             y_nom,
             xerr=x_err,
             yerr=y_err,
-            # **errorbar_kwargs,
+            fmt=fmt,
+            **errorbar_kwargs,
         )
     else:
-        return _original_plot(self, x_nom, y_nom, *args, **plot_kwargs)
+        return _original_plot(self, x_nom, y_nom, fmt, **plot_kwargs)
 
 
 matplotlib.axes.Axes.plot = new_plot
@@ -302,9 +292,6 @@ def new_lambdify(
     Raises:
         TypeError: Propagated from sympy if expressions or arguments are invalid.
 
-    Side Effects:
-        Prints diagnostic information when using the uncertainty backend.
-
     Examples:
         >>> x = sym.symbols("x")
         >>> f = sym.lambdify(x, x**2, "unc")
@@ -328,15 +315,13 @@ def new_lambdify(
             # .subs({**nominal_coefs_dict, **std_coefs_dict})
 
         args_nom = x
-        args_std = deepcopy(args_nom)
-        for arg in args_nom:
-            args_std.append(sym.Symbol(f"Delta_{str(arg)}"))
+        args_std = [*args_nom, *(sym.Symbol(f"Delta_{arg}") for arg in args_nom)]
 
         # print(expr_std.free_symbols)
         func_std = _original_lambdify(args_std, expr_std, "numpy")
         func_nom = _original_lambdify(args_nom, expr_nom, "numpy")
 
-        def unc_func(x: ArrayLike | Numeric | Uncertain) -> Uncertain | np.ndarray:
+        def unc_func(*values: ArrayLike | Numeric | Uncertain) -> Uncertain | np.ndarray:
             """Evaluate the uncertainty-aware expression.
 
             Args:
@@ -345,42 +330,26 @@ def new_lambdify(
             Returns:
                 Evaluated result containing propagated uncertainties.
             """
-            x = [x] if not hasattr(x, "__iter__") else x
-            x = np.asarray(x)
+            if len(values) != len(args_nom):
+                raise TypeError(f"Expected {len(args_nom)} arguments, got {len(values)}.")
 
-            x_has_unc = any(isinstance(xi, unc.core.Variable) for xi in x)
+            nominal_args = [nominal_values(value) for value in values]
+            std_args = [std_devs(value) for value in values]
+            nominal = func_nom(*nominal_args)
+            standard_deviation = np.abs(func_std(*nominal_args, *std_args))
 
-            x_nom = nominal_values(x) if x_has_unc else np.asarray(x, dtype=float)
-            x_std = std_devs(x) if x_has_unc else np.ones(np.shape(x_nom)) * 1e-30
-
-            # x_std = np.stack((x_nom, x_std), axis=1)
-            # x_std = np.concatenate((x_nom, x_std), axis=1)
-
-            print(f"x = {x}")
-            print(f"x_std = {x_std}")
-            print(f"x_nom = {x_nom}")
-
-            print(f"{expr_nom} : {func_nom(x)}")
-            print(f"{expr_std} : {func_std(x_nom, x_std)}")
-
-            if len(x) == 1:
-                return unc.ufloat(func_nom(x_nom), func_std(x_std))
-            else:
-                y1 = func_nom(x)
-                y2 = unc.ufloat(0, func_std(x_nom, x_std))
-
-                return y1 + y2
+            if all(np.ndim(value) == 0 for value in values):
+                return unc.ufloat(float(nominal), float(standard_deviation))
+            return unc.unumpy.uarray(nominal, standard_deviation)
 
         return unc_func
 
     else:
-        return _original_lambdify(x, expr=expr, *args, **kwargs)
+        return _original_lambdify(x, expr, modules=backend, *args, **kwargs)
 
 
 # sym.lambdify = new_lambdify
 
-
-sym.core.cache.use_cache = False
 
 _unc_attrs = {}
 
@@ -491,9 +460,6 @@ def new_subs(
 
 
 # sym.Basic.subs = new_subs
-
-sym.core.cache.use_cache = True
-
 
 _old_add_scatter = go.Figure.add_scatter
 
@@ -681,7 +647,6 @@ def new_add_scatter(
     return self
 
 
-go.Figure.add_scatter = new_add_scatter
 
 
 def plot_with_uncertainty(

@@ -8,6 +8,7 @@ from typing import Callable, Sequence
 import numpy as np
 import re
 import sympy as sym
+from sympy.parsing.sympy_parser import parse_expr
 import uncertainties as unc
 
 from .exceptions import ExpressionError
@@ -21,6 +22,47 @@ CoefficientsInput = Sequence[Coefficient] | np.ndarray
 Solution = sym.Expr | Uncertain | tuple[Uncertain, Uncertain]
 LambdaReturn = float | complex | np.ndarray | Uncertain
 InputValue = Numeric | np.ndarray | Uncertain
+
+_FORBIDDEN_EXPRESSION_TOKENS = re.compile(
+    r"__|\b(?:eval|exec|globals|import|lambda|locals|open)\b|[\[\]{};]"
+)
+_SAFE_GLOBALS = {
+    "__builtins__": {},
+    "Float": sym.Float,
+    "Function": sym.Function,
+    "Integer": sym.Integer,
+    "Rational": sym.Rational,
+    "Symbol": sym.Symbol,
+}
+_SAFE_LOCALS = {
+    name: getattr(sym, name)
+    for name in (
+        "Abs",
+        "E",
+        "I",
+        "Max",
+        "Min",
+        "pi",
+        "cos",
+        "exp",
+        "log",
+        "sin",
+        "sqrt",
+        "tan",
+    )
+}
+
+
+def _parse_expression(expr_str: str) -> sym.Expr:
+    """Parse mathematical input without exposing Python builtins."""
+    if not isinstance(expr_str, str) or not expr_str.strip():
+        raise ExpressionError("Expression must be a non-empty string.")
+    if _FORBIDDEN_EXPRESSION_TOKENS.search(expr_str):
+        raise ExpressionError("Expression contains unsupported syntax.")
+    try:
+        return parse_expr(expr_str, local_dict=_SAFE_LOCALS, global_dict=_SAFE_GLOBALS)
+    except (SyntaxError, TypeError, ValueError, sym.SympifyError) as exc:
+        raise ExpressionError(f"Invalid expression: {expr_str!r}") from exc
 
 
 class FunctionBase1D:
@@ -37,8 +79,8 @@ class FunctionBase1D:
         """
         self.expr_str = expr_str
         self.expr_unc: str = ""
-        self.expr_sym = sym.parse_expr(expr_str)
-        self.args = self.ordered_symbols(expr_str)
+        self.expr_sym = _parse_expression(expr_str)
+        self.args = self.ordered_symbols(expr_str, self.expr_sym)
 
         self._added_coefs = False
         self._unc_coefs = False
@@ -48,7 +90,7 @@ class FunctionBase1D:
         return None
 
     @staticmethod
-    def ordered_symbols(expr_str: str) -> list[sym.Symbol]:
+    def ordered_symbols(expr_str: str, expr: sym.Expr | None = None) -> list[sym.Symbol]:
         """Return sympy symbols in the order they appear in the expression string.
 
         Args:
@@ -57,28 +99,20 @@ class FunctionBase1D:
         Returns:
             A list of symbols ordered by their first appearance in the expression.
         """
-        expr = sym.sympify(expr_str)
+        expr = _parse_expression(expr_str) if expr is None else expr
+        name_to_symbol = {str(symbol): symbol for symbol in expr.free_symbols}
+        ordered: list[sym.Symbol] = []
+        used = {"x"}
 
-        symbols = expr.free_symbols
+        for name in re.findall(r"\b[A-Za-z_]\w*\b", expr_str):
+            if name in name_to_symbol and name not in used:
+                ordered.append(name_to_symbol[name])
+                used.add(name)
 
-        name_to_symbol = {str(s): s for s in symbols}
-
-        ordered = []
-        used = set("x")
-
-        i = 0
-        n = len(expr_str)
-
-        while i < n:
-            for name, symb in name_to_symbol.items():
-                if expr_str.startswith(name, i):
-                    if name not in used:
-                        ordered.append(symb)
-                        used.add(name)
-                    i += len(name)
-                    break
-            else:
-                i += 1
+        for name in sorted(name_to_symbol):
+            if name not in used:
+                ordered.append(name_to_symbol[name])
+                used.add(name)
 
         return ordered
 
@@ -155,7 +189,7 @@ class FunctionBase1D:
 
         else:
             if isinstance(y, str):
-                y = sym.parse_expr(y)
+                y = _parse_expression(y)
             new_expr = FunctionBase1D(self.expr_str)
             new_expr.expr_sym -= y
             if self._added_coefs:

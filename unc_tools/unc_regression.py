@@ -5,11 +5,13 @@ from __future__ import annotations
 import re
 import uuid
 import warnings
+from inspect import signature
 from typing import Callable, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.odr as odr
 import scipy.optimize as opt
 import sympy as sym
 import uncertainties as unc
@@ -17,7 +19,7 @@ import uncertainties.unumpy as unp
 from matplotlib.axes import Axes
 
 from .default_functions import FunctionBase1D, Poly
-from .exceptions import DataError, InitialGuessError, ModelTypeError
+from .exceptions import DataError, FitError, InitialGuessError, ModelTypeError, RootFindingError
 
 __all__ = ["UncRegression"]
 
@@ -106,6 +108,8 @@ class UncRegression:
 
         if len(x) == 0 or len(y) == 0:
             raise DataError("Input arrays cannot be empty.")
+        if len(x) != len(y):
+            raise DataError("Input arrays must have the same length.")
 
         if sl is not None:
             self.x = np.asarray(x)[sl]
@@ -162,7 +166,21 @@ class UncRegression:
     def _fit(self) -> None:
         """Fit the model and compute uncertainty-aware coefficients."""
         try:
-            if self.y_std is not None:
+            if self.x_std is not None:
+                n_params = self._parameter_count()
+                model = odr.Model(lambda beta, x: self.func(x, *beta))
+                data = odr.RealData(
+                    self.x_nom,
+                    self.y_nom,
+                    sx=self.x_std,
+                    sy=self.y_std,
+                )
+                output = odr.ODR(data, model, beta0=np.ones(n_params)).run()
+                if output.info not in {1, 2, 3, 4}:
+                    raise FitError(output.stopreason[0])
+                self.popt = output.beta
+                self.pcov = output.cov_beta * output.res_var
+            elif self.y_std is not None:
                 self.popt, self.pcov = opt.curve_fit(
                     self.func,
                     self.x_nom,
@@ -172,11 +190,11 @@ class UncRegression:
                 )
             else:
                 self.popt, self.pcov = opt.curve_fit(self.func, self.x_nom, self.y_nom)
-        except (RuntimeError, TypeError) as e:
-            warnings.warn(f"Curve fitting failed: {e}")
-            n_params = self.func.__code__.co_argcount - 1
-            self.popt = np.ones(n_params)
-            self.pcov = np.eye(n_params)
+        except (odr.OdrError, odr.OdrStop, RuntimeError, TypeError, ValueError) as exc:
+            raise FitError(f"Curve fitting failed: {exc}") from exc
+
+        if not np.all(np.isfinite(self.pcov)):
+            raise FitError("Curve fitting did not produce a finite covariance matrix.")
 
         residuals = self.y_nom - self.func(self.x_nom, *self.popt)
         ss_res = np.sum(residuals**2)
@@ -193,6 +211,20 @@ class UncRegression:
                 self.expression.add_coefs(self.popt)
             self.coefs = unp.uarray(self.popt, np.zeros_like(self.popt))
         return None
+
+    def _parameter_count(self) -> int:
+        """Return the number of model parameters after the independent variable."""
+        if self.expression is not None:
+            return len(self.expression.args)
+
+        parameters = list(signature(self.func).parameters.values())
+        if len(parameters) < 2 or any(
+            parameter.kind is parameter.VAR_POSITIONAL for parameter in parameters
+        ):
+            raise ModelTypeError(
+                "A callable model must declare x followed by its fitted parameters."
+            )
+        return len(parameters) - 1
 
     @property
     def coefs_nom(self) -> np.ndarray:
@@ -493,9 +525,7 @@ class UncRegression:
             if x0 is None:
                 raise InitialGuessError("An initial guess x0 is required for numerical solving.")
 
-            trys = 5
-            i = 0
-            while i < trys:
+            try:
                 result_root = opt.root_scalar(
                     f=lambda x, *args: self.func(x, *args) - yval,
                     x0=x0,
@@ -504,37 +534,43 @@ class UncRegression:
                     args=tuple(args_nominal),
                     **kwargs,
                 )
-
-                if not result_root.converged:
-                    xtol_root *= 100
-                    # print(f"Root not converged: {result_root.flag}, trying again")
-                i += 1
-            # if not result_root.converged:
-            #     raise TypeError(f"Root not converged: {result_root.flag}")
+            except (RuntimeError, ValueError) as exc:
+                raise RootFindingError(f"Root finding failed: {exc}") from exc
+            if not result_root.converged:
+                raise RootFindingError(f"Root finding did not converge: {result_root.flag}")
 
             if self.expression is None:
                 fun = self.func
             else:
                 fun = FunctionBase1D(self.expression.expr_str).lambda_fun
             coefs_nom = unc.unumpy.nominal_values(self.coefs)
-            coefs_std = unc.unumpy.std_devs(self.coefs)
-
             def f_vec(v):
                 x = v[0]
                 params = v[1:]
                 return fun(x, *params)
 
-            v0 = np.concatenate(([x0], coefs_nom))
-
-            grad = opt.approx_fprime(v0, f_vec, epsilon=1e-8)
+            v0 = np.concatenate(([result_root.root], coefs_nom))
+            steps = np.maximum(np.abs(v0), 1.0) * np.cbrt(np.finfo(float).eps)
+            steps[0] = max(steps[0], xtol_diff)
+            grad = np.empty_like(v0, dtype=float)
+            for index, step in enumerate(steps):
+                forward = v0.copy()
+                backward = v0.copy()
+                forward[index] += step
+                backward[index] -= step
+                grad[index] = (f_vec(forward) - f_vec(backward)) / (2 * step)
 
             dy = grad[0]
             dcoefs = grad[1:]
+            if not np.isfinite(dy) or np.isclose(dy, 0.0):
+                raise RootFindingError(
+                    "The model derivative at the root is zero or non-finite."
+                )
 
-            dxtol = np.sqrt(ytol**2 + np.sum((dcoefs * coefs_std) ** 2)) / dy
-
-            # print(xtol_root, xtol_diff, dxtol, xtol)
-            xtol_summ = np.sqrt(xtol_root**2 + xtol_diff**2 + dxtol**2 + xtol**2)
+            inverse_jacobian = -dcoefs / dy
+            parameter_variance = inverse_jacobian @ self.pcov @ inverse_jacobian
+            variance = (ytol / dy) ** 2 + parameter_variance + xtol**2
+            xtol_summ = np.sqrt(max(float(variance), 0.0))
 
             return unc.ufloat(result_root.root, xtol_summ)
 

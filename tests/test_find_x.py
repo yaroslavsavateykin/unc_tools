@@ -1,33 +1,35 @@
 import numpy as np
+import pytest
 import uncertainties as unc
 
-import sys
-import os
-
-sys.path.append(os.path.expanduser("~/unc_tools/"))
-
-from unc_tools import UncRegression
-
-x = np.linspace(0, 10, 100) + np.random.uniform(low=-0.05, high=0.05, size=100)
-y = 4 * np.linspace(0, 10, 100) + 3 + np.random.uniform(low=-0.05, high=0.05, size=100)
-
-reg = UncRegression(x, y)
-
-y0 = 25
-x0 = 5
-x0_1 = reg.find_x(y0)
-x0_2 = reg.find_x(y0, x0=x0)
-print(f"{x0_1:.10f}, {x0_2:.10f}")
+from unc_tools import FitError, RootFindingError, UncRegression
 
 
-y0 = unc.ufloat(25, 0.1)
-x0 = 5
-x0_1 = reg.find_x(y0)
-x0_2 = reg.find_x(y0, x0=x0)
-print(f"{x0_1:.10f}, {x0_2:.10f}")
+def quadratic(x, a):
+    return a * x**2
 
-y0 = unc.ufloat(25, 0.1)
-x0 = unc.ufloat(5, 0.1)
-x0_1 = reg.find_x(y0)
-x0_2 = reg.find_x(y0, x0=x0)
-print(f"{x0_1:.10f}, {x0_2:.10f}")
+
+def test_numerical_find_x_evaluates_uncertainty_at_root():
+    x = np.array([1.0, 2.0, 3.0, 4.0])
+    regression = UncRegression(x, quadratic(x, 2.0), quadratic)
+
+    root = regression.find_x(unc.ufloat(18.0, 0.9), x0=1.0)
+
+    assert root.nominal_value == pytest.approx(3.0)
+    assert root.std_dev == pytest.approx(0.075, rel=0.05)
+
+
+def test_failed_fit_raises_instead_of_returning_placeholder_coefficients():
+    with pytest.raises(FitError):
+        UncRegression([1.0], [2.0], lambda x, a, b: a * x + b)
+
+
+def test_zero_derivative_at_root_is_reported():
+    regression = UncRegression(
+        np.array([-2.0, -1.0, 1.0, 2.0]),
+        np.array([4.0, 1.0, 1.0, 4.0]),
+        quadratic,
+    )
+
+    with pytest.raises(RootFindingError):
+        regression.find_x(0.0, x0=0.1)

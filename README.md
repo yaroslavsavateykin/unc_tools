@@ -3,7 +3,7 @@
 
 Utilities for uncertainty-aware regression and symbolic function helpers.
 
-**Python version:** 3.10+
+**Python version:** 3.12+
 
 > 📦 PyPI package name: `uncertainty-tools`  
 > 🧩 Python import name: `unc_tools`
@@ -21,7 +21,7 @@ pip install uncertainty-tools
 ### Using uv
 
 ```bash
-uv pip install uncertainty-tools
+uv add uncertainty-tools
 ```
 
 --- 
@@ -29,6 +29,16 @@ uv pip install uncertainty-tools
 ## Notebooks
 
 [link](https://github.com/yaroslavsavateykin/unc_tools/tree/main/notebooks)
+
+---
+
+## Development
+
+Run the test suite with the optional test dependencies installed:
+
+```bash
+uv run --extra test pytest
+```
 
 ---
 
@@ -55,31 +65,22 @@ pred = reg.predict([0.5, 1.5])
 
 ---
 
-## Optional matplotlib and sympy patches
+## Optional matplotlib patches
 
-Importing `unc_tools.patches` monkey-patches:
+Importing `unc_tools.patches` monkey-patches only:
 
 - `matplotlib.axes.Axes.scatter`
-    
 - `matplotlib.axes.Axes.plot`
     
 
-and adds uncertainty-aware helpers for SymPy substitution and `lambdify`.
+It also exposes `new_subs` and `new_lambdify` helpers for explicit SymPy use.
+Plotly and SymPy global APIs are not modified.
 
 ⚠️ This introduces **global side effects** and must be enabled explicitly:
 
 ```python
 import unc_tools.patches  # noqa: F401
 ```
-
----
-
-## Public API
-
-- `UncRegression` — regression with uncertainty propagation
-- `FunctionBase1D`, `Poly`, `Hyper` — symbolic helpers for 1D expressions
-- `DataError`, `ExpressionError`, `InitialGuessError`, `ModelTypeError` — custom exceptions
-    
 
 ---
 
@@ -93,5 +94,3 @@ The public API may change between minor versions.
 ## License
 
 This project is licensed under the MIT License.
-
-

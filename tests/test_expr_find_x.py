@@ -1,26 +1,29 @@
 import numpy as np
+import pytest
 import uncertainties as unc
 
-import sys
-import os
+from unc_tools import DataError, ExpressionError, FunctionBase1D, UncRegression
 
-sys.path.append(os.path.expanduser("~/unc_tools/"))
 
-from unc_tools import UncRegression, Poly
+def test_expression_orders_overlapping_coefficient_names_correctly():
+    expression = FunctionBase1D("p_10*x + p_1")
 
-x = np.linspace(0,10,100) + np.random.uniform(low=-.05, high=.05, size= 100)
-y = 5 * np.linspace(0,10,100) + 3 + np.random.uniform(low=-.05, high=.05, size= 100)
+    assert [str(symbol) for symbol in expression.args] == ["p_10", "p_1"]
+    assert expression.lambda_fun(2.0, 3.0, 4.0) == 10.0
 
-reg = UncRegression(x,y)
 
-expr = reg.expression
+def test_expression_rejects_python_syntax():
+    with pytest.raises(ExpressionError):
+        FunctionBase1D("__import__('os').system('false')")
 
-y0 = 5
-x0 = expr.find_sols(y0)
 
-print(x0, y0)
+def test_x_uncertainties_use_odr_and_input_lengths_are_validated():
+    x = np.array([unc.ufloat(value, 0.05) for value in [0.0, 1.0, 2.0, 3.0]])
+    y = np.array(
+        [unc.ufloat(value, 0.1) for value in [1.02, 2.98, 5.01, 7.03]]
+    )
+    regression = UncRegression(x, y)
 
-y0 = unc.ufloat(5,0.5)
-x0 = expr.find_sols(y0)
-
-print(x0, y0)
+    assert regression.coefs_nom == pytest.approx([2.0, 1.0], abs=0.05)
+    with pytest.raises(DataError):
+        UncRegression([0.0], [0.0, 1.0])
