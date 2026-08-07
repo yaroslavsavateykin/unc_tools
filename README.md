@@ -32,16 +32,6 @@ uv add uncertainty-tools
 
 ---
 
-## Development
-
-Run the test suite with the optional test dependencies installed:
-
-```bash
-uv run --extra test pytest
-```
-
----
-
 ## Usage
 
 ```python
