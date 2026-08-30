@@ -17,11 +17,9 @@ def test_serif_is_opt_in_and_restores_matplotlib_defaults():
     serif()
     assert rcParams["text.usetex"] is False
     assert rcParams["font.family"] == ["serif"]
-    assert rcParams["font.serif"][:3] == [
-        "CMU Serif",
-        "Computer Modern Roman",
-        "DejaVu Serif",
-    ]
+    assert rcParams["font.serif"] == ["DejaVu Serif"]
+    assert rcParams["mathtext.fontset"] == "dejavuserif"
+    assert rcParams["mathtext.fallback"] == "stix"
 
     regression = UncRegression([0.0, 1.0, 2.0], [1.0, 3.01, 4.99])
     axes = regression.plot(serif=False, add_legend=False, show_expr=False)

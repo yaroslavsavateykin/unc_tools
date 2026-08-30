@@ -30,18 +30,20 @@ IndexSlice = slice | Sequence[int] | np.ndarray
 Solution = sym.Expr | Uncertain | tuple[Uncertain, Uncertain]
 PredictInput = Numeric | Uncertain | Sequence[Numeric | Uncertain] | np.ndarray
 
-_FONT_PARAMS = ("font.family", "font.serif")
+_FONT_PARAMS = ("font.family", "font.serif", "mathtext.fontset", "mathtext.fallback")
 _DEFAULT_FONT_PARAMS = {name: plt.rcParams[name] for name in _FONT_PARAMS}
 
 
 def _set_serif(enable: bool) -> None:
-    """Apply or restore the serif font fallback chain."""
+    """Apply or restore a serif configuration with complete symbol coverage."""
     plt.rcParams["text.usetex"] = False
     if enable:
         plt.rcParams.update(
             {
                 "font.family": "serif",
-                "font.serif": ["CMU Serif", "Computer Modern Roman", "DejaVu Serif"],
+                "font.serif": ["DejaVu Serif"],
+                "mathtext.fontset": "dejavuserif",
+                "mathtext.fallback": "stix",
             }
         )
     else:
@@ -49,7 +51,7 @@ def _set_serif(enable: bool) -> None:
 
 
 def serif() -> None:
-    """Enable the serif font fallback chain for subsequent Matplotlib plots."""
+    """Enable a serif font with Cyrillic and math-symbol coverage."""
     _set_serif(True)
 
 
@@ -264,8 +266,8 @@ class UncRegression:
             show_expr: Whether to include the analytic expression in the legend.
             show_coefficients: Whether to include coefficients in the legend.
             show_r2: Whether to include the R-squared value in the legend.
-            serif: Enable or disable CMU Serif for the plot. ``None`` preserves the
-                current Matplotlib font settings.
+            serif: Enable or disable the bundled DejaVu Serif configuration. ``None``
+                 preserves the current Matplotlib font settings.
             **kwargs: Additional keyword arguments forwarded to matplotlib.
 
         Returns:

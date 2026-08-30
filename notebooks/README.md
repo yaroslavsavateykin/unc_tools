@@ -62,5 +62,5 @@ Applied examples and practical use cases.
 Each notebook installs the package from PyPI:
 
 ```python
-!pip install uncertainty-tools==0.1.2
+!pip install uncertainty-tools==0.1.3
 ```
